@@ -1,0 +1,20 @@
+{
+  "owner_ids": {
+    "description": "允许使用插件的用户ID列表",
+    "type": "list",
+    "default": ["REDACTED_USER_ID"],
+    "hint": "填写允许调用日记插件的用户ID"
+  },
+  "allow_group_commands": {
+    "description": "群聊中允许使用的命令列表",
+    "type": "list",
+    "default": ["日记状态"],
+    "hint": "填写群聊中允许使用的命令，空表示全部禁止"
+  },
+  "auto_write_enabled": {
+    "description": "开启凌晨自动写日记",
+    "type": "bool",
+    "default": true,
+    "hint": "每天凌晨自动从LivingMemory读取记忆并生成Markdown日记"
+  }
+}
