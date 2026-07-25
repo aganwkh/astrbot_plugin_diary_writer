@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# AstrBot host state and plugin-generated private diaries
+astrbot_plugin_diary_writer_config.json
+data/
+plugin_data/
+diaries/
+metadata/
+backups/
+continuity.json
+generation_state.json

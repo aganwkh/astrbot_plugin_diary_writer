@@ -1,20 +1,4 @@
 name: astrbot_plugin_diary_writer
-desc: 千早爱音的日记插件，每天凌晨自动从LivingMemory读取记忆并生成Markdown日记
-version: 0.2.0
-author: 虾仁 & 爱音
-config_spec:
-  - key: owner_ids
-    label: 允许使用插件的用户ID
-    type: string_array
-    default: ["REDACTED_USER_ID"]
-    description: 填写允许调用日记插件的用户ID，多个用逗号分隔
-  - key: allow_group_commands
-    label: 允许群聊使用的命令
-    type: string_array
-    default: ["日记状态"]
-    description: 填写群聊中允许使用的命令，空表示全部禁止
-  - key: auto_write_enabled
-    label: 开启自动写日记
-    type: bool
-    default: true
-    description: 每天凌晨是否自动写日记
+desc: 基于 LivingMemory 的私密、可追溯长期 AI 日记插件
+version: 0.4.0
+author: aganwkh

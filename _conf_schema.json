@@ -1,20 +1,79 @@
 {
   "owner_ids": {
-    "description": "允许使用插件的用户ID列表",
+    "description": "允许使用插件的用户 ID 列表",
     "type": "list",
-    "default": ["REDACTED_USER_ID"],
-    "hint": "填写允许调用日记插件的用户ID"
+    "default": [],
+    "hint": "留空时插件不会读取活动或生成日记。"
   },
   "allow_group_commands": {
     "description": "群聊中允许使用的命令列表",
     "type": "list",
     "default": ["日记状态"],
-    "hint": "填写群聊中允许使用的命令，空表示全部禁止"
+    "hint": "仅允许无敏感摘要的命令；正文、测试、补写和重写始终只允许私聊。"
   },
   "auto_write_enabled": {
     "description": "开启凌晨自动写日记",
     "type": "bool",
     "default": true,
-    "hint": "每天凌晨自动从LivingMemory读取记忆并生成Markdown日记"
-  }
+    "hint": "关闭时不会注册任何自动写作定时任务。"
+  },
+  "livingmemory_db_path": {
+    "description": "LivingMemory 数据库路径（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用 AstrBot 标准 plugin_data 下的默认位置。"
+  },
+  "generation_provider_id": {
+    "description": "日记生成模型（可选）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "留空时使用触发私聊对应的模型。"
+  },
+  "persona_preset": {
+    "description": "日记预设",
+    "type": "string",
+    "default": "chihaya_anon",
+    "options": ["chihaya_anon", "factual"],
+    "hint": "千早爱音预设保留原有文风；通用事实预设不使用角色口吻。"
+  },
+  "persona_name": {
+    "description": "角色名覆盖（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用所选预设的角色名。"
+  },
+  "user_nickname": {
+    "description": "日记中的用户昵称",
+    "type": "string",
+    "default": "虾仁",
+    "hint": "仅用于生成文本；不用于授权、路径或模型选择。"
+  },
+  "diary_voice": {
+    "description": "日记口吻覆盖（可选）",
+    "type": "text",
+    "default": "",
+    "hint": "留空时使用所选预设的口吻。"
+  },
+  "website_sync_enabled": {
+    "description": "启用网站镜像同步",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；同步失败不会影响本地日记。"
+  },
+  "website_sync_path": {
+    "description": "网站日记目录",
+    "type": "string",
+    "default": "",
+    "hint": "启用同步时必须显式填写；插件只写入该目录。"
+  },
+  "provider_retry_count": {
+    "description": "生成失败重试次数",
+    "type": "int",
+    "default": 2,
+    "hint": "不含首次调用；失败原因会保存到 generation_state.json。"
+  },
+  "inactive_minutes": {"description":"自动写作静默分钟数","type":"int","default":90},
+  "fallback_inactive_minutes": {"description":"04:00兜底静默分钟数","type":"int","default":60},
+  "cron_start_delay_minutes": {"description":"00:00 后开始检查的延迟分钟数","type":"int","default":30}
 }
