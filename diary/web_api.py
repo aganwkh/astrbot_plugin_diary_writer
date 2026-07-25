@@ -15,7 +15,7 @@ from .storage import DiaryStorage
 from .trends import build_trends
 from .corrections import CorrectionError, CorrectionService
 from .archives import ArchiveError, ArchiveService
-from .lifecycle import lifecycle, all_lifecycles
+from .lifecycle import lifecycle
 from .reflections import ReflectionService
 from .integrity import IntegrityAudit
 
@@ -161,7 +161,6 @@ class DiaryWebApi:
             ("archive-download", self.archive_download, ["GET"], "Download diary archive"),
             ("archive-restore", self.archive_restore, ["POST"], "Restore diary archive"),
             ("lifecycle", self.lifecycle, ["GET"], "Diary Writer lifecycle"),
-            ("lifecycles", self.lifecycles, ["GET"], "Diary Writer lifecycle list"),
             ("reflections", self.reflections_list, ["GET"], "Diary Writer reflections"),
             ("reflection-generate", self.reflection_generate, ["POST"], "Generate diary reflection"),
             ("integrity", self.integrity_check, ["GET"], "Diary Writer integrity"),
@@ -478,17 +477,6 @@ class DiaryWebApi:
         except ValueError:
             return error_response("invalid lifecycle request", status_code=400)
         return json_response({"field": field, "value": value, "lifecycle": result})
-
-    async def lifecycles(self):
-        if (denied := self._identity_error()) is not None:
-            return denied
-        field = str(self._query("field") or "")
-        if field not in {"people", "projects"}:
-            return error_response("field must be people or projects", status_code=400)
-        try:
-            return json_response({"field": field, "entries": all_lifecycles(self.storage, field)})
-        except ValueError:
-            return error_response("invalid lifecycle request", status_code=400)
 
     async def reflections_list(self):
         if (denied := self._identity_error()) is not None:

@@ -1,7 +1,7 @@
-"""One process-wide writer gate for destructive archive restores.
+"""One process-wide maintenance gate for archive restore and snapshots.
 
-Every diary writer may share this gate.  Normal writes serialize with a
-restore, while a restore keeps the gate for its whole transaction.
+Normal writes run together, while restore and export snapshots wait for them
+and keep later writes out for the whole exclusive operation.
 """
 from __future__ import annotations
 

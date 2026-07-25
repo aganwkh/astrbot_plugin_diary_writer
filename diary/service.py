@@ -16,6 +16,8 @@ from .prompts import build_messages, parse_diary_response
 from .storage import DiaryStorage
 from .website_sync import WebsiteSync
 
+PROVIDER_TIMEOUT_SECONDS = 120
+
 
 class DiaryGenerationResult(str):
     """Path-like result that records whether this call changed daily facts."""
@@ -98,7 +100,7 @@ class DiaryService:
             return None
 
     async def _call_provider_preview(self, provider: Any, system: str, prompt: str) -> str:
-        response = await provider.text_chat(prompt=prompt, system_prompt=system, contexts=[])
+        response = await asyncio.wait_for(provider.text_chat(prompt=prompt, system_prompt=system, contexts=[]), timeout=PROVIDER_TIMEOUT_SECONDS)
         text = getattr(response, "completion_text", "")
         if not str(text).strip(): raise ValueError("provider returned an empty diary")
         return str(text)
@@ -111,7 +113,7 @@ class DiaryService:
             state.updated_at = self._now()
             self.storage.save_generation_state(state)
             try:
-                response = await provider.text_chat(prompt=prompt, system_prompt=system, contexts=[])
+                response = await asyncio.wait_for(provider.text_chat(prompt=prompt, system_prompt=system, contexts=[]), timeout=PROVIDER_TIMEOUT_SECONDS)
                 text = getattr(response, "completion_text", "")
                 if not str(text).strip():
                     raise ValueError("provider returned an empty diary")

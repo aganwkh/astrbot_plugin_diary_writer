@@ -36,7 +36,6 @@ export const diaryApi = Object.freeze({
   archiveDownload: (archive) => requireBridge().download(endpoint("archive-download"), { archive }, archive),
   archiveRestore: (archive, dry_run) => requireBridge().apiPost(endpoint("archive-restore"), { archive, dry_run }),
   lifecycle: (field, value) => requireBridge().apiGet(endpoint("lifecycle"), { field, value }),
-  lifecycles: (field) => requireBridge().apiGet(endpoint("lifecycles"), { field }),
   reflections: (kind, period) => requireBridge().apiGet(endpoint("reflections"), { kind, period }),
   reflectionGenerate: (kind, period, force) => requireBridge().apiPost(endpoint("reflection-generate"), { kind, period, force }),
   integrity: () => requireBridge().apiGet(endpoint("integrity")),

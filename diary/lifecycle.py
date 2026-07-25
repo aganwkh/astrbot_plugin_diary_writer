@@ -106,13 +106,3 @@ def lifecycle(storage: DiaryStorage, value: str, field: str, *, as_of: str | dat
         "continuous_intervals": _intervals(dates),
         "observational_status": status if dates else "unknown",
     }
-
-
-def all_lifecycles(storage: DiaryStorage, field: str, *, as_of: str | date | None = None) -> list[dict[str, Any]]:
-    if field not in _FIELDS:
-        raise ValueError("field must be people or projects")
-    names: dict[str, str] = {}
-    for item in storage.iter_daily_metadata() or ():
-        for value in _values(item, field):
-            names.setdefault(value.casefold(), value)
-    return [lifecycle(storage, value, field, as_of=as_of) for value in sorted(names.values(), key=str.casefold)]

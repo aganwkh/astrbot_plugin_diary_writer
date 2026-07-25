@@ -18,6 +18,7 @@ CORE_FIELDS = ("title", "mood", "mood_score", "topics", "people", "projects", "e
 REVIEW_CORE_FIELDS = ("title", "topics", "people", "projects", "events", "highlights", "unresolved")
 ANNUAL_PROMPT_DAILY_LIMIT = 120
 ANNUAL_PROMPT_EVENT_LIMIT = 3
+PROVIDER_TIMEOUT_SECONDS = 120
 
 
 def period_dates(kind: str, period: str) -> list[date]:
@@ -209,7 +210,7 @@ class ReviewService:
         last_error = None
         for _attempt in range(self.config.provider_retry_count + 1):
             try:
-                result = await provider.text_chat(prompt=prompt, system_prompt=system, contexts=[])
+                result = await asyncio.wait_for(provider.text_chat(prompt=prompt, system_prompt=system, contexts=[]), timeout=PROVIDER_TIMEOUT_SECONDS)
                 text = str(getattr(result, "completion_text", "") or "").strip()
                 if text:
                     return text

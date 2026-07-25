@@ -93,6 +93,25 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((state.pending_date, state.stage), ("2026-07-25", "failed"))
             self.assertIn("unavailable", state.last_error)
 
+    async def test_provider_timeout_records_failure_without_diary_files(self):
+        service_module = load_module("diary.service")
+
+        class HangingProvider:
+            async def text_chat(self, **_kwargs):
+                await __import__("asyncio").sleep(1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = DiaryStorage(Path(temp_dir))
+            previous = service_module.PROVIDER_TIMEOUT_SECONDS
+            service_module.PROVIDER_TIMEOUT_SECONDS = 0.01
+            try:
+                service = service_module.DiaryService(DiaryConfig.from_mapping({"owner_ids": ["1"], "provider_retry_count": 0}), storage, FakeSource())
+                self.assertIsNone(await service.generate(date(2026, 7, 25), HangingProvider()))
+            finally:
+                service_module.PROVIDER_TIMEOUT_SECONDS = previous
+            self.assertFalse(storage.has_any_diary("2026-07-25"))
+            self.assertEqual(storage.load_generation_state().stage, "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

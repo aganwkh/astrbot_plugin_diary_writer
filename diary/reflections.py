@@ -11,6 +11,8 @@ from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .reviews import core_fingerprint, period_dates
 from .storage import DiaryStorage, atomic_write_json
 
+PROVIDER_TIMEOUT_SECONDS = 120
+
 
 class ReflectionError(ValueError):
     pass
@@ -96,10 +98,13 @@ class ReflectionService:
                     for item in daily:
                         item_refs, item_snapshots = _source_refs(item)
                         refs.extend(item_refs); snapshots.extend(item_snapshots)
-                    response = await provider.text_chat(
-                        prompt=json.dumps({"period": period, "facts": snapshots, "persona": {"name": self.config.persona.name, "voice": self.config.persona.voice}}, ensure_ascii=False),
-                        system_prompt="Return JSON only with markdown and reflection. Write a subjective observation, not historical facts. Do not add facts beyond supplied snapshots.",
-                        contexts=[],
+                    response = await asyncio.wait_for(
+                        provider.text_chat(
+                            prompt=json.dumps({"period": period, "facts": snapshots, "persona": {"name": self.config.persona.name, "voice": self.config.persona.voice}}, ensure_ascii=False),
+                            system_prompt="Return JSON only with markdown and reflection. Write a subjective observation, not historical facts. Do not add facts beyond supplied snapshots.",
+                            contexts=[],
+                        ),
+                        timeout=PROVIDER_TIMEOUT_SECONDS,
                     )
                     raw = str(getattr(response, "completion_text", "") or "").strip()
                     data = json.loads(raw.removeprefix("```json").removesuffix("```").strip())

@@ -13,6 +13,14 @@ class PluginEntrypointShapeTests(unittest.TestCase):
         self.assertNotIn("/opt" + "/AstrBot", source)
         self.assertNotIn("USER_ID", source)
 
+    def test_readme_lists_every_registered_command(self):
+        import re
+
+        commands = re.findall(r'@filter\.command\("([^"]+)', Path("main.py").read_text(encoding="utf-8"))
+        readme = Path("README.md").read_text(encoding="utf-8")
+        for command in commands:
+            self.assertIn(f"`/{command}", readme, command)
+
 
 if __name__ == "__main__":
     unittest.main()

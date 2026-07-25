@@ -7,7 +7,7 @@ from pathlib import Path
 from diary.corrections import CorrectionService
 from diary.archives import ArchiveService
 from diary.integrity import IntegrityAudit
-from diary.lifecycle import all_lifecycles, lifecycle
+from diary.lifecycle import lifecycle
 from diary.reflections import ReflectionService
 from diary.reviews import ReviewService, core_fingerprint, review_fingerprint
 from diary.storage import DiaryStorage, atomic_write_json, atomic_write_text
@@ -40,7 +40,6 @@ class DerivedV06Tests(unittest.TestCase):
             self.assertEqual(result["continuous_intervals"], [{"start": "2024-01-01", "end": "2024-01-02"}, {"start": "2024-03-01", "end": "2024-03-01"}])
             self.assertEqual(result["observational_status"], "recent_not_observed")
             self.assertEqual([item["summary"] for item in result["key_related_events"]], ["Godot work"])
-            self.assertEqual(all_lifecycles(storage, "people")[0]["name"], "Alice")
 
     def test_lifecycle_default_as_of_marks_old_record_not_observed(self):
         with tempfile.TemporaryDirectory() as temp:
