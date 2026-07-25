@@ -6,6 +6,7 @@ class PluginEntrypointShapeTests(unittest.TestCase):
     def test_entrypoint_uses_configured_data_and_private_permission_gate(self):
         source = Path("main.py").read_text(encoding="utf-8")
         self.assertIn("get_astrbot_data_path", source)
+        self.assertIn("from .diary.config import DiaryConfig", source)
         self.assertIn("can_access_sensitive_diary", source)
         self.assertIn("self.config.can_auto_write", source)
         self.assertIn('@filter.command("补写年记")', source)
@@ -22,7 +23,7 @@ class PluginEntrypointShapeTests(unittest.TestCase):
             self.assertIn(f"`/{command}", readme, command)
 
     def test_release_version_is_consistent(self):
-        version = "1.0.0"
+        version = "1.1.0"
         self.assertIn(f"version: {version}", Path("metadata.yaml").read_text(encoding="utf-8"))
         self.assertIn(f'"{version}"', Path("main.py").read_text(encoding="utf-8"))
         self.assertIn(f'"plugin_version": "{version}"', Path("diary/archives.py").read_text(encoding="utf-8"))

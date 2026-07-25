@@ -11,12 +11,14 @@ from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 if __package__:
     # AstrBot imports plugins below ``data.plugins``.  Relative imports keep the
     # bundled diary package reachable without adding the plugin root to sys.path.
+    from .diary.activity import DailyActivityTracker
     from .diary.ask_diary import ask_diary
     from .diary.config import DiaryConfig
     from .diary.corrections import CorrectionError, CorrectionService
     from .diary.maintenance import GLOBAL_MAINTENANCE_GATE
     from .diary.memory_source import SQLiteLivingMemorySource
     from .diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from .diary.models import GenerationState
     from .diary.permissions import (
         can_access_sensitive_diary,
         can_use_group_command,
@@ -31,12 +33,14 @@ if __package__:
     from .diary.web_api import DiaryWebApi
 else:
     # The offline smoke suite loads main.py as a standalone module.
+    from diary.activity import DailyActivityTracker
     from diary.ask_diary import ask_diary
     from diary.config import DiaryConfig
     from diary.corrections import CorrectionError, CorrectionService
     from diary.maintenance import GLOBAL_MAINTENANCE_GATE
     from diary.memory_source import SQLiteLivingMemorySource
     from diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from diary.models import GenerationState
     from diary.permissions import (
         can_access_sensitive_diary,
         can_use_group_command,
@@ -59,7 +63,7 @@ def _message_text(event) -> str:
     return str(value or "").lstrip()
 
 
-@register("astrbot_plugin_diary_writer", "aganwkh", "1.0.0", "私密、可追溯的长期 AI 日记")
+@register("astrbot_plugin_diary_writer", "aganwkh", "1.1.0", "私密、可追溯的长期 AI 日记")
 class DiaryWriterPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -71,6 +75,7 @@ class DiaryWriterPlugin(Star):
         self.service = DiaryService(self.config, self.storage, SQLiteLivingMemorySource(self.config.livingmemory_path(Path(get_astrbot_data_path()))))
         self.reviews = ReviewService(self.storage, self.config)
         self.corrections = CorrectionService(self.storage, self.reviews)
+        self.activity_tracker = DailyActivityTracker(self.storage, saved_rounds=2)
         self.web_api = DiaryWebApi(context, self.config, self.storage, self.service, self.reviews, self._after_daily_unlocked)
         self.web_api.register()
         self._reminder_lock = asyncio.Lock()
@@ -96,17 +101,24 @@ class DiaryWriterPlugin(Star):
             logger.warning(f"[DiaryWriter] could not clear previous cron jobs: {exc}")
         if not self.config.can_auto_write:
             return
+        state = self.storage.load_daily_finalization_state()
+        if not state.get("effective_date"):
+            self.storage.save_daily_finalization_state({"effective_date": datetime.now().date().isoformat(), "initialized_at": datetime.now().astimezone().isoformat()})
         try:
             await self.context.cron_manager.add_basic_job(name="DiaryWriter_CheckAndWrite", cron_expression="*/10 0-3 * * *", handler=self._cron, description="DiaryWriter automatic generation", persistent=True)
             await self.context.cron_manager.add_basic_job(name="DiaryWriter_Fallback", cron_expression="0 4 * * *", handler=self._fallback, description="DiaryWriter fallback generation", persistent=True)
+            await self.context.cron_manager.add_basic_job(name="DiaryWriter_Finalization", cron_expression="10 4 * * *", handler=self._daily_finalization, description="DiaryWriter daily finalization", persistent=True)
         except Exception as exc:
             logger.error(f"[DiaryWriter] could not register cron jobs: {exc}")
+        await self._daily_finalization()
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_user_message(self, event: AstrMessageEvent):
-        if is_authorized(event, self.config):
+        text = _message_text(event)
+        if self._private(event) and text and not text.startswith("/"):
             async with GLOBAL_MAINTENANCE_GATE.operation():
                 self.storage.save_activity(datetime.now().astimezone().isoformat())
+                await self.activity_tracker.record(datetime.now().date(), datetime.now().astimezone().isoformat(), text, str(getattr(event, "unified_msg_origin", "") or ""))
 
     @filter.event_message_type(filter.EventMessageType.PRIVATE_MESSAGE)
     async def on_this_day_reminder(self, event: AstrMessageEvent):
@@ -143,6 +155,42 @@ class DiaryWriterPlugin(Star):
 
     async def _fallback(self):
         await self._automatic(self.config.fallback_inactive_minutes)
+
+    async def _daily_finalization(self):
+        """At 04:10, fill only post-v1.1 gaps; no missing-material path is a skip."""
+        if not self.config.can_auto_write:
+            return
+        now = datetime.now()
+        yesterday = (now - timedelta(days=1)).date()
+        state = self.storage.load_daily_finalization_state()
+        try:
+            effective = datetime.strptime(str(state.get("effective_date") or yesterday.isoformat()), "%Y-%m-%d").date()
+        except ValueError:
+            effective = now.date()
+            state["effective_date"] = effective.isoformat()
+        if yesterday < effective:
+            state.update({"effective_date": effective.isoformat(), "last_finalization_at": now.astimezone().isoformat(), "last_checked_through": yesterday.isoformat()})
+            self.storage.save_daily_finalization_state(state)
+            return
+        provider = await self._provider()
+        if provider is None:
+            self.storage.save_generation_state(GenerationState(pending_date=yesterday.isoformat(), stage="failed", last_error="generation provider unavailable", updated_at=now.astimezone().isoformat()))
+            return
+        async with GLOBAL_MAINTENANCE_GATE.operation():
+            target = effective
+            while target <= yesterday:
+                if self.storage.has_any_diary(target.isoformat()):
+                    if migrate_legacy_markdown(self.storage, target.isoformat()):
+                        self.reviews.mark_daily_changed(target, "legacy_metadata_migrated")
+                else:
+                    result = await self.service._generate_unlocked(target, provider)
+                    if not result:
+                        break
+                    await self._after_daily_unlocked(target, provider, "daily_added")
+                target += timedelta(days=1)
+            state.update({"effective_date": effective.isoformat(), "last_finalization_at": now.astimezone().isoformat(), "last_checked_through": yesterday.isoformat()})
+            self.storage.save_daily_finalization_state(state)
+            await self._catch_up_reviews_unlocked(provider)
 
     async def _automatic(self, inactive_minutes):
         now = datetime.now(); raw = self.storage.load_activity()

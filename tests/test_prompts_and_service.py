@@ -30,6 +30,12 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(parsed.metadata.events[0].memory_ids, ["1"])
         self.assertEqual(parsed.metadata.events[0].inferences, ["可能感到轻松"])
 
+    def test_parser_rejects_fabricated_historical_memory_ids(self):
+        prompts = load_module("diary.prompts")
+        raw = json.dumps({"markdown": "# Diary\n\n回忆。", "title": "Diary", "events": [], "used_historical_memory_ids": ["candidate", "fabricated"]})
+        parsed = prompts.parse_diary_response(raw, "2026-07-25", set(), {"candidate"})
+        self.assertEqual(parsed.used_historical_memory_ids, ["candidate"])
+
 
 class FakeSource:
     def read_day(self, _day, limit=80):

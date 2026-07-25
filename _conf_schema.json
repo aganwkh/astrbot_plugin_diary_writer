@@ -28,7 +28,7 @@
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "留空时使用触发私聊对应的模型；v1.0 管理页的补写/重写必须显式配置此项。"
+    "hint": "留空时使用触发私聊对应的模型；v1.1 管理页的补写/重写必须显式配置此项。"
   },
   "persona_preset": {
     "description": "日记预设",
@@ -81,5 +81,38 @@
     "type": "bool",
     "default": false,
     "hint": "默认关闭；仅授权用户的普通私聊首次触发，群聊和命令不会提示。"
+  },
+  "low_activity_round_threshold": {
+    "description": "低活跃私聊轮数阈值",
+    "type": "int",
+    "default": 2,
+    "hint": "当天授权私聊有效入站轮数不超过此值时使用 low_activity。"
+  },
+  "sparse_memory_threshold": {
+    "description": "稀疏日记记忆阈值",
+    "type": "int",
+    "default": 2,
+    "hint": "私聊轮数超过低活跃阈值后，当天 LivingMemory 不超过此值时使用 sparse。"
+  },
+  "recent_context_days": {
+    "description": "近期私聊上下文天数",
+    "type": "int",
+    "default": 3
+  },
+  "historical_memory_min_count": {
+    "description": "低活跃随机历史记忆最少条数",
+    "type": "int",
+    "default": 1
+  },
+  "historical_memory_max_count": {
+    "description": "低活跃随机历史记忆最多条数",
+    "type": "int",
+    "default": 3
+  },
+  "reflection_cooldown_days": {
+    "description": "随机历史记忆回忆冷却天数",
+    "type": "int",
+    "default": 30,
+    "hint": "仅实际写入日记的历史记忆会进入软冷却。"
   }
 }

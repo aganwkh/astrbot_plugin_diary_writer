@@ -66,6 +66,10 @@ class DiaryStorage:
         self.state_path = root / "generation_state.json"
         self.continuity_path = root / "continuity.json"
         self.activity_path = root / "activity.json"
+        self.daily_activity_root = root / "daily_activity"
+        self.private_sessions_path = root / "private_session_ids.json"
+        self.reflection_usage_path = root / "reflection_usage.json"
+        self.daily_finalization_state_path = root / "daily_finalization_state.json"
         self.reminder_state_path = root / "reminder_state.json"
         self.revision_root = root / "revisions"
         self.correction_root = root / "corrections"
@@ -80,6 +84,10 @@ class DiaryStorage:
 
     def metadata_path(self, date: str) -> Path:
         return self.metadata_root / f"{date}.json"
+
+    def daily_activity_path(self, value: str) -> Path:
+        self.validate_diary_date(value)
+        return self.daily_activity_root / f"{value}.json"
 
     def review_path(self, kind: str, period: str) -> Path:
         return self.review_root / kind / f"{period}.md"
@@ -386,6 +394,44 @@ class DiaryStorage:
             return str(data.get("last_active_at") or "")
         except (OSError, AttributeError, json.JSONDecodeError):
             return ""
+
+    def load_daily_activity(self, value: str) -> dict[str, Any]:
+        self.validate_diary_date(value)
+        return self._load_json(self.daily_activity_path(value)) or {
+            "date": value, "round_count": 0, "conversation_sources": [], "private_session_ids": [],
+        }
+
+    def save_daily_activity(self, value: str, activity: dict[str, Any]) -> None:
+        self.validate_diary_date(value)
+        if str(activity.get("date") or value) != value:
+            raise ValueError("daily activity date does not match path")
+        atomic_write_json(self.daily_activity_path(value), activity)
+
+    def delete_daily_activity(self, value: str) -> None:
+        self.validate_diary_date(value)
+        self.daily_activity_path(value).unlink(missing_ok=True)
+
+    def load_private_session_ids(self) -> list[str]:
+        data = self._load_json(self.private_sessions_path) or {}
+        value = data.get("session_ids")
+        return list(dict.fromkeys(str(item) for item in value if str(item))) if isinstance(value, list) else []
+
+    def save_private_session_ids(self, session_ids: list[str]) -> None:
+        atomic_write_json(self.private_sessions_path, {"session_ids": list(dict.fromkeys(str(item) for item in session_ids if str(item)))})
+
+    def load_reflection_usage(self) -> dict[str, dict[str, Any]]:
+        data = self._load_json(self.reflection_usage_path) or {}
+        value = data.get("memories")
+        return {str(key): item for key, item in value.items() if isinstance(item, dict)} if isinstance(value, dict) else {}
+
+    def save_reflection_usage(self, usage: dict[str, dict[str, Any]]) -> None:
+        atomic_write_json(self.reflection_usage_path, {"memories": usage})
+
+    def load_daily_finalization_state(self) -> dict[str, Any]:
+        return self._load_json(self.daily_finalization_state_path) or {}
+
+    def save_daily_finalization_state(self, state: dict[str, Any]) -> None:
+        atomic_write_json(self.daily_finalization_state_path, state)
 
     def save_reminder_state(self, state: dict[str, Any]) -> None:
         atomic_write_json(self.reminder_state_path, state)

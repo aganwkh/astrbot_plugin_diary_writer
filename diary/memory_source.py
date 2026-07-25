@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime, time
+from datetime import date, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +16,12 @@ class MemorySourceError(RuntimeError):
 class MemorySource(Protocol):
     def read_day(self, diary_date: date, limit: int = 80) -> list[SourceMemory]:
         """Return source memories without changing the upstream store."""
+
+    def read_range(self, start: date, end: date, session_ids: set[str], limit: int = 80) -> list[SourceMemory]:
+        """Return only explicitly known private-session memories in a date range."""
+
+    def read_before(self, before: date, session_ids: set[str], limit: int = 500) -> list[SourceMemory]:
+        """Return only explicitly known private-session memories before a day."""
 
 
 def _timestamp(metadata: dict) -> float | None:
@@ -42,6 +48,19 @@ class SQLiteLivingMemorySource:
         self.database_path = database_path
 
     def read_day(self, diary_date: date, limit: int = 80) -> list[SourceMemory]:
+        return self._read(lambda item: item.occurred_at.date() == diary_date, limit)
+
+    def read_range(self, start: date, end: date, session_ids: set[str], limit: int = 80) -> list[SourceMemory]:
+        if not session_ids:
+            return []
+        return self._read(lambda item: start <= item.occurred_at.date() <= end and item.session_id in session_ids, limit)
+
+    def read_before(self, before: date, session_ids: set[str], limit: int = 500) -> list[SourceMemory]:
+        if not session_ids:
+            return []
+        return self._read(lambda item: item.occurred_at.date() < before and item.session_id in session_ids, limit)
+
+    def _read(self, include, limit: int) -> list[SourceMemory]:
         if not self.database_path.is_file():
             raise MemorySourceError(f"LivingMemory database not found: {self.database_path}")
         uri = f"{self.database_path.resolve().as_uri()}?mode=ro"
@@ -71,14 +90,11 @@ class SQLiteLivingMemorySource:
             if timestamp is None or not str(text or "").strip():
                 continue
             occurred_at = datetime.fromtimestamp(timestamp)
-            if occurred_at.date() != diary_date:
-                continue
             try:
                 importance = float(metadata.get("importance") or 0)
             except (TypeError, ValueError):
                 importance = 0.0
-            records.append(
-                SourceMemory(
+            record = SourceMemory(
                     memory_id=str(memory_id),
                     occurred_at=occurred_at,
                     text=str(text).strip(),
@@ -87,6 +103,7 @@ class SQLiteLivingMemorySource:
                     topics=_text_list(metadata.get("topics")),
                     key_facts=_text_list(metadata.get("key_facts")),
                 )
-            )
+            if include(record):
+                records.append(record)
         records.sort(key=lambda item: (item.occurred_at, -item.importance, item.memory_id))
         return records[:max(0, limit)]

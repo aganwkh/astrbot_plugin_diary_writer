@@ -69,7 +69,9 @@ export function renderTimeline(state, onEntry) {
   section.append(element("h2", "section-title", "日历 / 时间线"));
   section.append(state.calendar.length ? list(state.calendar, (row, item) => {
     const detail = element("div", "row-copy");
-    detail.append(element("strong", "", `${item.date} · ${item.title || "无标题"}`), element("span", "muted", `${item.event_count || 0} 个事件`));
+    const mode = item.entry_type || "normal";
+    const activity = mode === "low_activity" ? `；${item.activity_round_count || 0} 轮私聊、${item.conversation_source_count || 0} 条聊天素材、${item.historical_memory_source_count || 0} 条回忆` : "";
+    detail.append(element("strong", "", `${item.date} · ${item.title || "无标题"}`), element("span", "muted", `${mode} · ${item.event_count || 0} 个事件${activity}`));
     row.append(detail, button("查看", () => onEntry("daily", item.date), "button secondary"));
   }) : element("p", "muted", "没有可展示的日记。"));
   const browse = element("form", "generate-form");

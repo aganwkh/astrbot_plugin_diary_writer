@@ -113,7 +113,7 @@ class WebApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["from"], (today - timedelta(days=web_api.MAX_CALENDAR_DAYS - 1)).isoformat())
         self.assertEqual(result["to"], recent)
         self.assertEqual([entry["date"] for entry in result["entries"]], [recent])
-        self.assertEqual(set(result["entries"][0]), {"date", "title", "event_count"})
+        self.assertEqual(set(result["entries"][0]), {"date", "title", "event_count", "entry_type", "activity_round_count", "conversation_source_count", "historical_memory_source_count"})
 
     async def test_generate_requires_configured_provider_without_umo_fallback(self):
         self.request(payload={"kind": "daily", "period": "2024-01-01", "force": False})

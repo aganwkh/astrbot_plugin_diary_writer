@@ -16,6 +16,7 @@ PROMPT_VERSION = "v1"
 class ParsedDiary:
     markdown: str
     metadata: DiaryMetadata
+    used_historical_memory_ids: list[str]
 
 
 def _list(value: Any) -> list[str]:
@@ -40,7 +41,24 @@ def build_messages(date: str, events: list[DiaryEvent], continuity: ContinuitySt
     return system, json.dumps(material, ensure_ascii=False, indent=2)
 
 
-def parse_diary_response(raw: str, date: str, allowed_memory_ids: set[str]) -> ParsedDiary:
+def build_adaptive_messages(
+    date: str, entry_type: str, events: list[DiaryEvent], continuity: ContinuityState, config: DiaryConfig,
+    conversation_sources: list[dict], recent_context_sources: list[dict], historical_memory_sources: list[dict],
+) -> tuple[str, str]:
+    persona = config.persona
+    nickname = config.user_nickname or "我"
+    system = f"""你是{persona.name or '日记作者'}，为{nickname}写{date}的日记。口吻：{persona.voice}
+这是 {entry_type} 模式。只把当天 event.facts 写成当天发生的确定事实。近期和历史记忆必须保留其原始日期语义；它们只能作为回忆、联想或延续，绝不能改写成今天发生。
+允许正文中的主观猜测，但必须使用不确定表达，不能制造人物、地点、结果或新的结构化事实。只返回 JSON，不要代码围栏。字段包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics、used_historical_memory_ids。events 只能引用当天 event 的 memory_ids；used_historical_memory_ids 只能列出实际写进正文的历史候选 ID。"""
+    material = {
+        "date": date, "entry_type": entry_type, "prompt_version": "v1.1", "today_events": as_jsonable(events),
+        "conversation_sources": conversation_sources, "recent_context_sources": recent_context_sources,
+        "historical_memory_sources": historical_memory_sources, "continuity": as_jsonable(continuity),
+    }
+    return system, json.dumps(material, ensure_ascii=False, indent=2)
+
+
+def parse_diary_response(raw: str, date: str, allowed_memory_ids: set[str], historical_candidate_ids: set[str] | None = None) -> ParsedDiary:
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -85,4 +103,5 @@ def parse_diary_response(raw: str, date: str, allowed_memory_ids: set[str]) -> P
         memory_ids=used_ids, source_count=len(allowed_memory_ids),
         generated_at=datetime.now(timezone.utc).isoformat(), prompt_version=PROMPT_VERSION,
     )
-    return ParsedDiary(data["markdown"].strip() + "\n", metadata)
+    historical = [memory_id for memory_id in _list(data.get("used_historical_memory_ids")) if memory_id in (historical_candidate_ids or set())]
+    return ParsedDiary(data["markdown"].strip() + "\n", metadata, list(dict.fromkeys(historical)))

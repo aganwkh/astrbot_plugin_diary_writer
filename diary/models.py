@@ -50,6 +50,14 @@ class DiaryMetadata:
     model: str = ""
     provider: str = ""
     prompt_version: str = "v1"
+    entry_type: str = "normal"
+    activity_round_count: int = 0
+    conversation_sources: list[dict[str, str]] = field(default_factory=list)
+    recent_context_sources: list[dict[str, Any]] = field(default_factory=list)
+    historical_memory_candidate_ids: list[str] = field(default_factory=list)
+    historical_memory_used_ids: list[str] = field(default_factory=list)
+    historical_memory_sources: list[dict[str, Any]] = field(default_factory=list)
+    private_session_ids: list[str] = field(default_factory=list)
 
 
 @dataclass

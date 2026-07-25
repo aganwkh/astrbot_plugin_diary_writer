@@ -49,6 +49,12 @@ class DiaryConfig:
     fallback_inactive_minutes: int = 60
     cron_start_delay_minutes: int = 30
     on_this_day_reminder_enabled: bool = False
+    low_activity_round_threshold: int = 2
+    sparse_memory_threshold: int = 2
+    recent_context_days: int = 3
+    historical_memory_min_count: int = 1
+    historical_memory_max_count: int = 3
+    reflection_cooldown_days: int = 30
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "DiaryConfig":
@@ -71,6 +77,12 @@ class DiaryConfig:
             fallback_inactive_minutes=max(1, int(raw.get("fallback_inactive_minutes", 60) or 60)),
             cron_start_delay_minutes=max(0, min(59, int(raw.get("cron_start_delay_minutes", 30) or 0))),
             on_this_day_reminder_enabled=bool(raw.get("on_this_day_reminder_enabled", False)),
+            low_activity_round_threshold=max(0, min(20, int(raw.get("low_activity_round_threshold", 2) or 0))),
+            sparse_memory_threshold=max(0, int(raw.get("sparse_memory_threshold", 2) or 0)),
+            recent_context_days=max(1, min(7, int(raw.get("recent_context_days", 3) or 3))),
+            historical_memory_min_count=max(1, min(3, int(raw.get("historical_memory_min_count", 1) or 1))),
+            historical_memory_max_count=max(1, min(3, int(raw.get("historical_memory_max_count", 3) or 3))),
+            reflection_cooldown_days=max(1, min(365, int(raw.get("reflection_cooldown_days", 30) or 30))),
         )
 
     @property

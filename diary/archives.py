@@ -29,16 +29,18 @@ MAX_COMPRESSION_RATIO = 100
 PRE_RESTORE_KEEP = 5
 _TREE_ROOTS = (
     "diaries", "metadata", "reviews", "review_metadata", "revisions", "corrections",
-    "revision_state", "reflections", "reflection_metadata",
+    "revision_state", "reflections", "reflection_metadata", "daily_activity",
 )
 _STATE_FILES = (
     "continuity.json", "generation_state.json", "review_generation_state.json",
     "reminder_state.json", "activity.json", "reflection_generation_state.json",
+    "private_session_ids.json", "reflection_usage.json", "daily_finalization_state.json",
 )
 _SAFE_SETTINGS = (
     "persona_preset", "persona_name", "user_nickname", "diary_voice", "auto_write_enabled",
     "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes",
-    "on_this_day_reminder_enabled",
+    "on_this_day_reminder_enabled", "low_activity_round_threshold", "sparse_memory_threshold",
+    "recent_context_days", "historical_memory_min_count", "historical_memory_max_count", "reflection_cooldown_days",
 )
 _DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 _RESERVED_WINDOWS = {"CON", "PRN", "AUX", "NUL", *(f"COM{value}" for value in range(1, 10)), *(f"LPT{value}" for value in range(1, 10))}
@@ -98,9 +100,9 @@ class ArchiveService:
         manifest_files = [{"path": name, "size": path.stat().st_size, "sha256": _sha256_file(path)} for name, path in files]
         manifest = {
             "format_version": ARCHIVE_FORMAT,
-            "plugin_version": "1.0.0",
+            "plugin_version": "1.1.0",
             "created_at": _utc_now(),
-            "plugin_data_format": "v0.3-v0.6",
+            "plugin_data_format": "v0.3-v1.1",
             "settings_restore_policy": "exported_safe_settings_are_not_restored",
             "files": manifest_files,
         }
@@ -291,8 +293,8 @@ class ArchiveService:
         if len(parts) < 2:
             return False
         root = parts[0]
-        if root in {"diaries", "metadata", "revision_state"}:
-            suffix = {"diaries": ".md", "metadata": ".json", "revision_state": ".json"}[root]
+        if root in {"diaries", "metadata", "revision_state", "daily_activity"}:
+            suffix = {"diaries": ".md", "metadata": ".json", "revision_state": ".json", "daily_activity": ".json"}[root]
             return len(parts) == 2 and parts[1].endswith(suffix) and cls._valid_date(parts[1][:-len(suffix)])
         if root in {"reviews", "review_metadata", "reflections", "reflection_metadata"}:
             suffix = ".json" if root.endswith("metadata") else ".md"

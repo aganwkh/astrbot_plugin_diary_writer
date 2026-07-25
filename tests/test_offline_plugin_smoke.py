@@ -137,7 +137,7 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             enabled_context.cron_manager.existing_jobs = [types.SimpleNamespace(name="DiaryWriter_previous", job_id="old"), types.SimpleNamespace(name="Other", job_id="keep")]
             enabled = plugin_module.DiaryWriterPlugin(enabled_context, {"owner_ids": ["1"], "auto_write_enabled": True})
             await enabled.initialize()
-            self.assertEqual([job["cron_expression"] for job in enabled_context.cron_manager.jobs], ["*/10 0-3 * * *", "0 4 * * *"])
+            self.assertEqual([job["cron_expression"] for job in enabled_context.cron_manager.jobs], ["*/10 0-3 * * *", "0 4 * * *", "10 4 * * *"])
             self.assertEqual(enabled_context.cron_manager.deleted, ["old"])
             self.assertGreaterEqual(len(enabled_context.web_routes), 8)
 
@@ -167,6 +167,52 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             plugin.storage.save_activity((datetime.now() - timedelta(minutes=91)).isoformat())
             await plugin._cron()
             self.assertEqual(provider.calls, 1)
+
+    async def test_activity_counts_only_authorized_non_command_private_messages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            private = Event(); private.message_str = "第一句"
+            second = Event(); second.message_str = "第二句"
+            third = Event(); third.message_str = "第三句"
+            group = Event(origin="qq:GroupMessage:1"); group.message_str = "群聊"
+            stranger = Event(sender="2"); stranger.message_str = "陌生人"
+            command = Event(); command.message_str = "/查看日记"
+            for event in (private, second, third, group, stranger, command):
+                await plugin.on_user_message(event)
+            activity = plugin.storage.load_daily_activity(datetime.now().date().isoformat())
+            self.assertEqual(activity["round_count"], 3)
+            self.assertEqual([item["user_text"] for item in activity["conversation_sources"]], ["第一句", "第二句"])
+
+    async def test_finalization_fills_only_post_effective_missing_days_and_is_idempotent(self):
+        class EmptySource:
+            def read_day(self, *_args, **_kwargs): return []
+            def read_range(self, *_args, **_kwargs): return []
+            def read_before(self, *_args, **_kwargs): return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            plugin.service.source = EmptySource()
+            provider = Provider()
+
+            async def get_provider(_event=None): return provider
+            plugin._provider = get_provider
+            yesterday = (datetime.now() - timedelta(days=1)).date()
+            plugin.storage.save_daily_finalization_state({"effective_date": yesterday.isoformat()})
+            await plugin._daily_finalization()
+            self.assertTrue(plugin.storage.has_diary(yesterday.isoformat()))
+            self.assertEqual(provider.calls, 1)
+            await plugin._daily_finalization()
+            self.assertEqual(provider.calls, 1)
+
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            plugin.storage.save_daily_finalization_state({"effective_date": datetime.now().date().isoformat()})
+            await plugin._daily_finalization()
+            self.assertFalse(plugin.storage.has_any_diary((datetime.now() - timedelta(days=1)).date().isoformat()))
+            self.assertEqual(plugin.storage.load_generation_state().stage, "idle")
 
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))

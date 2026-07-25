@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from .config import DiaryConfig
 from .continuity import update_continuity
+from .activity import classify_entry_type, select_historical_memories
 from .events import cluster_memories
 from .migration import migrate_legacy_markdown
-from .memory_source import MemorySource, MemorySourceError
+from .memory_source import MemorySource
+from .models import GenerationState, SourceMemory
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
-from .models import GenerationState
-from .prompts import build_messages, parse_diary_response
+from .prompts import build_adaptive_messages, build_messages, parse_diary_response
 from .storage import DiaryStorage
 from .website_sync import WebsiteSync
 
@@ -62,16 +63,54 @@ class DiaryService:
         self.storage.save_generation_state(state)
         try:
             memories = self.source.read_day(diary_date)
-            if not memories:
-                raise ValueError("no usable LivingMemory records for this date")
+            previous = self.storage.load_metadata(date_text) if force else None
+            activity = self.storage.load_daily_activity(date_text)
+            round_count = max(0, int(activity.get("round_count") or 0))
+            entry_type = str(previous.get("entry_type") or "") if previous and previous.get("entry_type") == "low_activity" else classify_entry_type(
+                round_count, len(memories), self.config.low_activity_round_threshold, self.config.sparse_memory_threshold,
+            )
             events = cluster_memories(memories)
-            system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config)
+            conversation_sources: list[dict] = []
+            recent_context_sources: list[dict] = []
+            historical_sources: list[dict] = []
+            sessions: list[str] = []
+            if entry_type == "normal":
+                system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config)
+            elif entry_type == "low_activity" and previous:
+                conversation_sources = self._dict_list(previous.get("conversation_sources"))
+                recent_context_sources = self._dict_list(previous.get("recent_context_sources"))
+                historical_sources = self._dict_list(previous.get("historical_memory_sources"))
+                sessions = self._strings(previous.get("private_session_ids"))
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
+            else:
+                conversation_sources = self._dict_list(activity.get("conversation_sources"))
+                sessions = self._strings(activity.get("private_session_ids")) or self.storage.load_private_session_ids()
+                recent = self._read_range(diary_date - timedelta(days=self.config.recent_context_days), diary_date - timedelta(days=1), set(sessions))
+                recent_context_sources = [self._snapshot(item) for item in recent]
+                if entry_type == "low_activity":
+                    historical = select_historical_memories(
+                        self._read_before(diary_date, set(sessions)), diary_date, self.storage.load_reflection_usage(), set(sessions),
+                        minimum=self.config.historical_memory_min_count, maximum=self.config.historical_memory_max_count, cooldown_days=self.config.reflection_cooldown_days,
+                    )
+                    historical_sources = [self._snapshot(item) for item in historical]
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
             response = await self._call_provider(provider, system, prompt, state)
-            parsed = parse_diary_response(response, date_text, {item.memory_id for item in memories})
+            parsed = parse_diary_response(response, date_text, {item.memory_id for item in memories}, {str(item.get("memory_id") or "") for item in historical_sources})
             parsed.metadata.provider = self.config.generation_provider_id
             parsed.metadata.model = self._provider_name(provider)
+            parsed.metadata.entry_type = entry_type
+            parsed.metadata.activity_round_count = round_count
+            parsed.metadata.conversation_sources = conversation_sources
+            parsed.metadata.recent_context_sources = recent_context_sources
+            parsed.metadata.historical_memory_sources = historical_sources
+            parsed.metadata.historical_memory_candidate_ids = [str(item.get("memory_id") or "") for item in historical_sources]
+            parsed.metadata.historical_memory_used_ids = parsed.used_historical_memory_ids
+            parsed.metadata.private_session_ids = sessions
+            parsed.metadata.source_count = len(memories) + len(conversation_sources) + len(recent_context_sources) + len(historical_sources)
             self.storage.write_diary(date_text, parsed.markdown, parsed.metadata, backup_existing=force)
             self.storage.save_continuity(update_continuity(self.storage.load_continuity(), parsed.metadata))
+            self._save_reflection_usage(parsed.used_historical_memory_ids)
+            self.storage.delete_daily_activity(date_text)
             completed_at = self._now()
             self.storage.save_generation_state(GenerationState(retry_count=state.retry_count, last_success_at=completed_at, updated_at=completed_at))
             if self.config.website_sync_enabled and self.config.website_sync_path:
@@ -131,6 +170,36 @@ class DiaryService:
             return str(getattr(metadata, "id", ""))
         except Exception:
             return provider.__class__.__name__
+
+    def _read_range(self, start: date, end: date, sessions: set[str]) -> list[SourceMemory]:
+        reader = getattr(self.source, "read_range", None)
+        return list(reader(start, end, sessions)) if callable(reader) and sessions else []
+
+    def _read_before(self, before: date, sessions: set[str]) -> list[SourceMemory]:
+        reader = getattr(self.source, "read_before", None)
+        return list(reader(before, sessions)) if callable(reader) and sessions else []
+
+    def _save_reflection_usage(self, memory_ids: list[str]) -> None:
+        if not memory_ids:
+            return
+        usage = self.storage.load_reflection_usage()
+        now = self._now()
+        for memory_id in memory_ids:
+            current = usage.get(memory_id, {})
+            usage[memory_id] = {"last_reflected_at": now, "reflection_count": max(0, int(current.get("reflection_count") or 0)) + 1}
+        self.storage.save_reflection_usage(usage)
+
+    @staticmethod
+    def _snapshot(memory: SourceMemory) -> dict[str, Any]:
+        return {"memory_id": memory.memory_id, "occurred_at": memory.occurred_at.isoformat(), "text": memory.text, "importance": memory.importance, "session_id": memory.session_id}
+
+    @staticmethod
+    def _dict_list(value: Any) -> list[dict]:
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    @staticmethod
+    def _strings(value: Any) -> list[str]:
+        return list(dict.fromkeys(str(item) for item in value if str(item))) if isinstance(value, list) else []
 
     @staticmethod
     def _now() -> str:

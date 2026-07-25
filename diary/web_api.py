@@ -131,6 +131,8 @@ class DiaryWebApi:
             key: getattr(config, key) for key in (
                 "persona_preset", "persona_name", "user_nickname", "diary_voice", "auto_write_enabled",
                 "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
+                "low_activity_round_threshold", "sparse_memory_threshold", "recent_context_days",
+                "historical_memory_min_count", "historical_memory_max_count", "reflection_cooldown_days",
             ) if hasattr(config, key)
         })
         self.reflections = ReflectionService(storage, config)
@@ -250,9 +252,16 @@ class DiaryWebApi:
             if (start and value < start) or (end and value > end):
                 continue
             events = item.get("events") if isinstance(item.get("events"), list) else []
+            conversations = item.get("conversation_sources") if isinstance(item.get("conversation_sources"), list) else []
+            historical = item.get("historical_memory_sources") if isinstance(item.get("historical_memory_sources"), list) else []
+            rounds = item.get("activity_round_count")
             entries.append({
                 "date": value, "title": str(item.get("title") or ""),
                 "event_count": sum(isinstance(event, dict) for event in events),
+                "entry_type": str(item.get("entry_type") or "normal"),
+                "activity_round_count": rounds if isinstance(rounds, int) and rounds >= 0 else 0,
+                "conversation_source_count": len(conversations),
+                "historical_memory_source_count": len(historical),
             })
         return json_response({"from": start, "to": end, "entries": sorted(entries, key=lambda item: item["date"], reverse=True)})
 

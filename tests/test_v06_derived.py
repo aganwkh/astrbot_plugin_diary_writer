@@ -114,7 +114,7 @@ class DerivedV06Tests(unittest.TestCase):
             IntegrityAudit(storage).safe_repair()
             self.assertEqual(lifecycle(storage, "v03", "projects")["first_seen"], "2023-01-01")
             archive = asyncio.run(ArchiveService(storage).export())
-            self.assertEqual(ArchiveService(storage).verify(archive)["plugin_data_format"], "v0.3-v0.6")
+            self.assertEqual(ArchiveService(storage).verify(archive)["plugin_data_format"], "v0.3-v1.1")
 
     def test_technical_ids_do_not_change_fingerprint_but_audit_finds_real_source_change(self):
         with tempfile.TemporaryDirectory() as temp:
