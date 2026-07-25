@@ -2,6 +2,16 @@
 
 基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v1.0.0 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
 
+当前稳定版：[v1.0.0](https://github.com/aganwkh/astrbot_plugin_diary_writer/releases/tag/v1.0.0)
+
+## 已验证兼容性
+
+- AstrBot 4.26.7
+- LivingMemory 2.3.6 / schema 8
+- Python 3.12
+
+升级前建议备份完整 `plugin_data`。网站同步默认关闭。
+
 ## 命令与权限
 
 只有 `owner_ids` 中的用户可用。日记正文、测试、补写和重写只接受私聊；群聊最多允许配置中的无敏感 `/日记状态`。
@@ -31,9 +41,9 @@
 
 可在 `_conf_schema.json` 对应的 AstrBot 插件配置中调整 `inactive_minutes`、`fallback_inactive_minutes` 和 `cron_start_delay_minutes`。
 
-## 数据与兼容性
+## 数据与迁移
 
-v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_writer/`：
+v1.0 数据保存在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_writer/`：
 
 - `diaries/YYYY-MM-DD.md`：供人阅读的日记。
 - `metadata/YYYY-MM-DD.json`：事件、证据 memory IDs、主题、心情和生成信息。
@@ -52,9 +62,9 @@ v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_w
 
 ## 当前 LivingMemory 兼容范围
 
-离线 adapter 只读兼容含 `documents(id, text, metadata)` 的旧版 SQLite 存储，并会在缺库或字段不兼容时安全失败。实际 AstrBot/LivingMemory 运行时 API 仍需在生产环境做一次加载联调确认。
+只读 adapter 兼容含 `documents(id, text, metadata)` 的 SQLite 存储，并会在缺库或字段不兼容时安全失败。AstrBot 4.26.7 与 LivingMemory 2.3.6 / schema 8 已完成真实 Linux 生产联调；LivingMemory 数据库始终只读。
 
-## v0.4 回顾与检索
+## 回顾与检索
 
 - 周记使用 ISO 周（周一至周日），月记使用自然月；均从 daily JSON 生成，不读取原始聊天。
 - 周日/月末 daily 成功落盘后会尝试生成已结束周期的总结；自动写作结束后还会补扫缺少总结的已结束周期。
@@ -63,7 +73,7 @@ v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_w
 - `/问日记 <问题>`、`/那年今日`、`/日记项目 <名称>`、`/日记话题 <名称>` 仅限私聊。Ask Diary 先本地检索，并始终给出来源日期。
 - 手动总结命令：`/补写周记 YYYY-Www`、`/重写周记 YYYY-Www`、`/补写月记 YYYY-MM`、`/重写月记 YYYY-MM`。
 
-## v0.5 长期观察与管理页
+## 长期观察与管理页
 
 - 年记使用自然年，保存独立 Markdown 与 JSON，并与周/月一样保留覆盖日期、缺失日期、来源、`summary_stale`、原子写入、备份和失败状态。`/补写年记 YYYY` 与 `/重写年记 YYYY` 仅限授权私聊。
 - 年记的事件、项目、话题、情绪和数量统计只来自 daily JSON；monthly 仅作为高层叙事与周期变化上下文，不参与事实计数，避免重复统计。
@@ -72,9 +82,9 @@ v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_w
 - AstrBot 管理端提供 `diary-manager` Plugin Page，用于浏览、搜索、趋势、stale/生成状态、来源证据和手动生成。静态资源不携带日记、人物、项目、证据、凭据或配置；所有私密内容均按需通过 Dashboard 鉴权的 plugin-local API 读取。前端将 API 文本视为不可信数据，以 DOM `textContent` 渲染，不拼接到 `innerHTML`。
 - 管理页的补写/重写必须显式配置 `generation_provider_id`，因为管理页请求没有私聊 UMO 可用来选择模型。
 
-离线测试验证了 Plugin Page API 的注册形状与拒绝未认证请求；实际 AstrBot Dashboard 身份中间件、Plugin Page bridge 加载及真机深浅色样式仍为**待生产环境验证**，本仓库不会在离线环境伪造这些运行时行为。
+Plugin Page 已在真实 AstrBot Dashboard 验证身份中间件、bridge 加载、plugin-local API、深浅色主题和移动端布局；未认证请求不能读取私密正文。
 
-## v0.6 事实纠错、长期归档与完整性
+## 事实纠错、长期归档与完整性
 
 - `/纠正日记 YYYY-MM-DD field "旧值" -> "新值"` 只接受唯一、精确的当前字段值；不会调用 LLM，也不会顺带改写其他事实。事件事实请在 `diary-manager` 按需读取该日 metadata 后选择稳定的 `event_id` / `fact_id` 再修改。无法安全确定正文位置时，Markdown 只追加更正注记，结构化 metadata 与 correction ledger 是当前事实。
 - 每次纠错或回滚都会先保留 revision。revision 记录 parent、导致它的 correction，以及 rollback 的来源和目标；correction 的 `active`、`superseded`、`rolled_back` 状态让历史链可审计。当前检索、Ask Diary、趋势与生命周期只读取已纠正的 daily metadata。
