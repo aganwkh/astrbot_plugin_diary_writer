@@ -28,7 +28,7 @@
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "留空时使用触发私聊对应的模型；v0.6 管理页的补写/重写必须显式配置此项。"
+    "hint": "留空时使用触发私聊对应的模型；v1.0 管理页的补写/重写必须显式配置此项。"
   },
   "persona_preset": {
     "description": "日记预设",

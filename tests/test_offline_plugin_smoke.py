@@ -73,7 +73,7 @@ class Event:
         return text
 
 
-def load_plugin(data_root: Path):
+def load_plugin(data_root: Path, module_name: str = "offline_main"):
     logger = types.SimpleNamespace(info=lambda *_: None, warning=lambda *_: None, error=lambda *_: None)
     filter_api = types.SimpleNamespace(
         EventMessageType=types.SimpleNamespace(ALL="all", PRIVATE_MESSAGE="private_message"),
@@ -100,7 +100,13 @@ def load_plugin(data_root: Path):
         "astrbot.api.star": star, "astrbot.core": types.ModuleType("astrbot.core"),
         "astrbot.core.utils": types.ModuleType("astrbot.core.utils"), "astrbot.core.utils.astrbot_path": path_api,
     }
-    spec = importlib.util.spec_from_file_location("offline_main", Path("main.py"))
+    if "." in module_name:
+        package_names = ("data", "data.plugins", "data.plugins.astrbot_plugin_diary_writer")
+        for package_name in package_names:
+            package = types.ModuleType(package_name)
+            package.__path__ = [str(Path.cwd())]
+            modules[package_name] = package
+    spec = importlib.util.spec_from_file_location(module_name, Path("main.py"))
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(module)
@@ -112,6 +118,18 @@ async def collect(generator):
 
 
 class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_entrypoint_loads_under_astrbot_package_namespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(
+                Path(temp),
+                "data.plugins.astrbot_plugin_diary_writer.main",
+            )
+            plugin = plugin_module.DiaryWriterPlugin(
+                Context(),
+                {"owner_ids": ["1"], "auto_write_enabled": False},
+            )
+            await plugin.initialize()
+
     async def test_initialize_registers_original_cron_windows_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))
@@ -124,9 +142,14 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreaterEqual(len(enabled_context.web_routes), 8)
 
             disabled_context = Context()
+            disabled_context.cron_manager.existing_jobs = [
+                types.SimpleNamespace(name="DiaryWriter_previous", job_id="old"),
+                types.SimpleNamespace(name="Other", job_id="keep"),
+            ]
             disabled = plugin_module.DiaryWriterPlugin(disabled_context, {"owner_ids": ["1"], "auto_write_enabled": False})
             await disabled.initialize()
             self.assertEqual(disabled_context.cron_manager.jobs, [])
+            self.assertEqual(disabled_context.cron_manager.deleted, ["old"])
 
     async def test_cron_obeys_inactivity_and_four_am_fallback_paths(self):
         with tempfile.TemporaryDirectory() as temp:

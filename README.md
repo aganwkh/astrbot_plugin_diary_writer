@@ -1,6 +1,6 @@
 # AI 日记作家
 
-基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v0.6.0 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
+基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v1.0.0 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
 
 ## 命令与权限
 

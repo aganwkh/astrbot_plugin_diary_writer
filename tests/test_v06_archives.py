@@ -40,6 +40,13 @@ class ArchiveTests(unittest.TestCase):
             service = ArchiveService(storage); good = asyncio.run(service.export())
             corrupted = root / "corrupted.zip"; corrupted.write_bytes(good.read_bytes()[:-12])
             with self.assertRaises(ArchiveError): service.verify(corrupted)
+            invalid = root / "invalid.zip"; invalid.write_bytes(b"not a zip archive")
+            with self.assertRaises(ArchiveError): service.verify(invalid)
+            checksum = root / "checksum.zip"; payload = b"actual"
+            with zipfile.ZipFile(checksum, "w") as archive:
+                archive.writestr("manifest.json", json.dumps({"format_version": 1, "files": [{"path": "metadata/2025-07-25.json", "size": len(payload), "sha256": "0" * 64}]}))
+                archive.writestr("metadata/2025-07-25.json", payload)
+            with self.assertRaises(ArchiveError): service.verify(checksum)
             traversal = root / "traversal.zip"
             with zipfile.ZipFile(traversal, "w") as archive:
                 archive.writestr("manifest.json", json.dumps({"format_version": 1, "files": []}))
@@ -50,6 +57,11 @@ class ArchiveTests(unittest.TestCase):
                 archive.writestr("manifest.json", json.dumps({"format_version": 1, "files": []}))
                 archive.writestr("metadata\\escape.json", "x")
             with self.assertRaises(ArchiveError): service.verify(backslash)
+            absolute = root / "absolute.zip"
+            with zipfile.ZipFile(absolute, "w") as archive:
+                archive.writestr("manifest.json", json.dumps({"format_version": 1, "files": []}))
+                archive.writestr("/metadata/escape.json", "x")
+            with self.assertRaises(ArchiveError): service.verify(absolute)
             bomb = root / "bomb.zip"; payload = b"0" * (2 * 1024 * 1024)
             with zipfile.ZipFile(bomb, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 archive.writestr("manifest.json", json.dumps({"format_version": 1, "files": [{"path": "metadata/bomb.json", "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}]}))

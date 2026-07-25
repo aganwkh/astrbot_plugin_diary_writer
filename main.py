@@ -8,19 +8,47 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from diary.config import DiaryConfig
-from diary.memory_source import SQLiteLivingMemorySource
-from diary.permissions import can_access_sensitive_diary, can_use_group_command, is_authorized, private_only_reminder
-from diary.service import DiaryService, diary_changed
-from diary.storage import DiaryStorage
-from diary.schedule import should_generate, should_run_regular_check
-from diary.migration import migrate_legacy_directory, migrate_legacy_markdown
-from diary.maintenance import GLOBAL_MAINTENANCE_GATE
-from diary.reviews import ReviewService
-from diary.retrieval import on_this_day, timeline
-from diary.ask_diary import ask_diary
-from diary.web_api import DiaryWebApi
-from diary.corrections import CorrectionError, CorrectionService
+if __package__:
+    # AstrBot imports plugins below ``data.plugins``.  Relative imports keep the
+    # bundled diary package reachable without adding the plugin root to sys.path.
+    from .diary.ask_diary import ask_diary
+    from .diary.config import DiaryConfig
+    from .diary.corrections import CorrectionError, CorrectionService
+    from .diary.maintenance import GLOBAL_MAINTENANCE_GATE
+    from .diary.memory_source import SQLiteLivingMemorySource
+    from .diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from .diary.permissions import (
+        can_access_sensitive_diary,
+        can_use_group_command,
+        is_authorized,
+        private_only_reminder,
+    )
+    from .diary.retrieval import on_this_day, timeline
+    from .diary.reviews import ReviewService
+    from .diary.schedule import should_generate, should_run_regular_check
+    from .diary.service import DiaryService, diary_changed
+    from .diary.storage import DiaryStorage
+    from .diary.web_api import DiaryWebApi
+else:
+    # The offline smoke suite loads main.py as a standalone module.
+    from diary.ask_diary import ask_diary
+    from diary.config import DiaryConfig
+    from diary.corrections import CorrectionError, CorrectionService
+    from diary.maintenance import GLOBAL_MAINTENANCE_GATE
+    from diary.memory_source import SQLiteLivingMemorySource
+    from diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from diary.permissions import (
+        can_access_sensitive_diary,
+        can_use_group_command,
+        is_authorized,
+        private_only_reminder,
+    )
+    from diary.retrieval import on_this_day, timeline
+    from diary.reviews import ReviewService
+    from diary.schedule import should_generate, should_run_regular_check
+    from diary.service import DiaryService, diary_changed
+    from diary.storage import DiaryStorage
+    from diary.web_api import DiaryWebApi
 
 
 def _message_text(event) -> str:
@@ -31,7 +59,7 @@ def _message_text(event) -> str:
     return str(value or "").lstrip()
 
 
-@register("astrbot_plugin_diary_writer", "aganwkh", "0.6.0", "私密、可追溯的长期 AI 日记")
+@register("astrbot_plugin_diary_writer", "aganwkh", "1.0.0", "私密、可追溯的长期 AI 日记")
 class DiaryWriterPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
@@ -59,8 +87,6 @@ class DiaryWriterPlugin(Star):
                             self.reviews.mark_daily_changed(datetime.strptime(path.stem, "%Y-%m-%d").date(), "legacy_metadata_migrated")
                         except ValueError:
                             continue
-        if not self.config.can_auto_write:
-            return
         try:
             jobs = await self.context.cron_manager.list_jobs()
             for job in jobs:
@@ -68,6 +94,8 @@ class DiaryWriterPlugin(Star):
                     await self.context.cron_manager.delete_job(job.job_id)
         except Exception as exc:
             logger.warning(f"[DiaryWriter] could not clear previous cron jobs: {exc}")
+        if not self.config.can_auto_write:
+            return
         try:
             await self.context.cron_manager.add_basic_job(name="DiaryWriter_CheckAndWrite", cron_expression="*/10 0-3 * * *", handler=self._cron, description="DiaryWriter automatic generation", persistent=True)
             await self.context.cron_manager.add_basic_job(name="DiaryWriter_Fallback", cron_expression="0 4 * * *", handler=self._fallback, description="DiaryWriter fallback generation", persistent=True)
