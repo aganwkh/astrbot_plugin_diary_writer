@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
 import tempfile
-from datetime import datetime, timezone
+import uuid
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import ContinuityState, DiaryMetadata, GenerationState, as_jsonable
+from .models import ContinuityState, DiaryMetadata, GenerationState, as_jsonable, normalize_daily_metadata
 
 
 def _write_temp(path: Path, content: str) -> Path:
@@ -64,6 +67,13 @@ class DiaryStorage:
         self.continuity_path = root / "continuity.json"
         self.activity_path = root / "activity.json"
         self.reminder_state_path = root / "reminder_state.json"
+        self.revision_root = root / "revisions"
+        self.correction_root = root / "corrections"
+        self.revision_state_root = root / "revision_state"
+        self.reflection_root = root / "reflections"
+        self.reflection_metadata_root = root / "reflection_metadata"
+        self.reflection_backup_root = root / "reflection_backups"
+        self.reflection_state_path = root / "reflection_generation_state.json"
 
     def diary_path(self, date: str) -> Path:
         return self.diary_root / f"{date}.md"
@@ -77,6 +87,12 @@ class DiaryStorage:
     def review_metadata_path(self, kind: str, period: str) -> Path:
         return self.review_metadata_root / kind / f"{period}.json"
 
+    def reflection_path(self, kind: str, period: str) -> Path:
+        return self.reflection_root / kind / f"{period}.md"
+
+    def reflection_metadata_path(self, kind: str, period: str) -> Path:
+        return self.reflection_metadata_root / kind / f"{period}.json"
+
     def has_diary(self, date: str) -> bool:
         return self.diary_path(date).is_file() and self.metadata_path(date).is_file()
 
@@ -86,7 +102,13 @@ class DiaryStorage:
     def has_review(self, kind: str, period: str) -> bool:
         return self.review_path(kind, period).is_file() and self.review_metadata_path(kind, period).is_file()
 
+    def has_reflection(self, kind: str, period: str) -> bool:
+        return self.reflection_path(kind, period).is_file() and self.reflection_metadata_path(kind, period).is_file()
+
     def write_diary(self, date: str, markdown: str, metadata: DiaryMetadata, backup_existing: bool = False) -> None:
+        self.write_diary_data(date, markdown, as_jsonable(metadata), backup_existing)
+
+    def write_diary_data(self, date: str, markdown: str, metadata: dict[str, Any], backup_existing: bool = False, *, normalize: bool = True) -> None:
         markdown_path = self.diary_path(date)
         metadata_path = self.metadata_path(date)
         if backup_existing and (markdown_path.exists() or metadata_path.exists()):
@@ -95,7 +117,7 @@ class DiaryStorage:
         markdown_temp = _write_temp(markdown_path, markdown)
         metadata_temp = _write_temp(
             metadata_path,
-            json.dumps(as_jsonable(metadata), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            json.dumps(normalize_daily_metadata(metadata) if normalize else as_jsonable(metadata), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
         old_markdown = markdown_path.read_text(encoding="utf-8") if markdown_path.exists() else None
         old_metadata = metadata_path.read_text(encoding="utf-8") if metadata_path.exists() else None
@@ -146,6 +168,31 @@ class DiaryStorage:
     def load_review_metadata(self, kind: str, period: str) -> dict[str, Any] | None:
         return self._load_json(self.review_metadata_path(kind, period))
 
+    def write_reflection(self, kind: str, period: str, markdown: str, metadata: dict[str, Any], backup_existing: bool = False) -> None:
+        markdown_path = self.reflection_path(kind, period)
+        metadata_path = self.reflection_metadata_path(kind, period)
+        if backup_existing and (markdown_path.exists() or metadata_path.exists()):
+            backup_dir = _new_backup_dir(self.reflection_backup_root, kind, period)
+            if markdown_path.exists():
+                atomic_write_text(backup_dir / markdown_path.name, markdown_path.read_text(encoding="utf-8"))
+            if metadata_path.exists():
+                atomic_write_text(backup_dir / metadata_path.name, metadata_path.read_text(encoding="utf-8"))
+        self._write_pair(markdown_path, metadata_path, markdown, metadata)
+
+    def load_reflection_metadata(self, kind: str, period: str) -> dict[str, Any] | None:
+        return self._load_json(self.reflection_metadata_path(kind, period))
+
+    def iter_reflection_metadata(self):
+        if not self.reflection_metadata_root.exists():
+            return
+        for kind_path in self.reflection_metadata_root.iterdir():
+            if not kind_path.is_dir():
+                continue
+            for path in sorted(kind_path.glob("*.json")):
+                data = self._load_json(path)
+                if data is not None:
+                    yield kind_path.name, path.stem, data
+
     def iter_review_metadata(self):
         if not self.review_metadata_root.exists():
             return
@@ -159,6 +206,156 @@ class DiaryStorage:
 
     def load_metadata(self, date: str) -> dict[str, Any] | None:
         return self._load_json(self.metadata_path(date))
+
+    def revision_path(self, date: str, revision_id: str) -> Path:
+        self.validate_diary_date(date)
+        self.validate_revision_id(revision_id)
+        return self.revision_root / date / revision_id
+
+    def correction_path(self, date: str, correction_id: str) -> Path:
+        self.validate_diary_date(date)
+        self.validate_correction_id(correction_id)
+        return self.correction_root / date / f"{correction_id}.json"
+
+    def revision_state_path(self, date: str) -> Path:
+        self.validate_diary_date(date)
+        return self.revision_state_root / f"{date}.json"
+
+    @staticmethod
+    def validate_diary_date(value: str) -> None:
+        try:
+            if date.fromisoformat(value).isoformat() != value:
+                raise ValueError
+        except (TypeError, ValueError) as exc:
+            raise ValueError("date must be ISO YYYY-MM-DD") from exc
+
+    @staticmethod
+    def validate_revision_id(value: str) -> None:
+        if not re.fullmatch(r"rev_[0-9a-f]{32}", str(value)):
+            raise ValueError("invalid revision id")
+
+    @staticmethod
+    def validate_correction_id(value: str) -> None:
+        if not re.fullmatch(r"correction_[0-9a-f]{32}", str(value)):
+            raise ValueError("invalid correction id")
+
+    def load_revision_state(self, date: str) -> dict[str, Any]:
+        state = self._load_json(self.revision_state_path(date)) or {"date": date, "current_revision_id": ""}
+        current = str(state.get("current_revision_id") or "")
+        if current:
+            self._validate_same_date_revision(date, current)
+        return state
+
+    def save_revision_state(self, date: str, state: dict[str, Any]) -> None:
+        self.validate_diary_date(date)
+        if str(state.get("date") or date) != date:
+            raise ValueError("revision state date does not match path")
+        current = str(state.get("current_revision_id") or "")
+        if current:
+            self._validate_same_date_revision(date, current)
+        atomic_write_json(self.revision_state_path(date), state)
+
+    def create_revision(self, date: str, *, operation: str, correction_id: str = "", parent_revision_id: str | None = None, rollback_target_revision_id: str = "", set_current: bool = False) -> dict[str, Any]:
+        self.validate_diary_date(date)
+        if correction_id:
+            self.validate_correction_id(correction_id)
+        if parent_revision_id:
+            self.validate_revision_id(parent_revision_id)
+        if rollback_target_revision_id:
+            self._validate_same_date_revision(date, rollback_target_revision_id)
+        markdown_path, metadata_path = self.diary_path(date), self.metadata_path(date)
+        if not markdown_path.is_file() or not metadata_path.is_file():
+            raise FileNotFoundError(f"daily diary is incomplete: {date}")
+        state = self.load_revision_state(date)
+        revision_id = f"rev_{uuid.uuid4().hex}"
+        parent = state.get("current_revision_id", "") if parent_revision_id is None else parent_revision_id
+        if parent:
+            self._validate_same_date_revision(date, str(parent))
+        revision = {
+            "id": revision_id, "date": date, "created_at": datetime.now(timezone.utc).isoformat(),
+            "operation": operation, "parent_revision_id": str(parent or ""), "correction_id": correction_id,
+            "rollback_target_revision_id": rollback_target_revision_id,
+        }
+        target = self.revision_path(date, revision_id)
+        atomic_write_text(target / "diary.md", markdown_path.read_text(encoding="utf-8"))
+        atomic_write_text(target / "metadata.json", metadata_path.read_text(encoding="utf-8"))
+        atomic_write_json(target / "revision.json", revision)
+        if set_current:
+            state.update({"date": date, "current_revision_id": revision_id, "updated_at": revision["created_at"]})
+            self.save_revision_state(date, state)
+        return revision
+
+    def load_revision(self, date: str, revision_id: str) -> dict[str, Any] | None:
+        return self._load_json(self.revision_path(date, revision_id) / "revision.json")
+
+    def _validate_same_date_revision(self, date: str, revision_id: str) -> None:
+        self.validate_revision_id(revision_id)
+        revision = self.load_revision(date, revision_id)
+        if revision is None or str(revision.get("date") or "") != date:
+            raise ValueError("revision does not exist for this diary date")
+
+    def delete_revision(self, date: str, revision_id: str) -> None:
+        target = self.revision_path(date, revision_id)
+        root = (self.revision_root / date).resolve()
+        if target.resolve().parent != root:
+            raise ValueError("invalid revision path")
+        shutil.rmtree(target, ignore_errors=True)
+
+    def load_revision_contents(self, date: str, revision_id: str) -> tuple[str, dict[str, Any]]:
+        root = self.revision_path(date, revision_id)
+        try:
+            markdown = (root / "diary.md").read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FileNotFoundError(f"missing revision markdown: {revision_id}") from exc
+        metadata = self._load_json(root / "metadata.json")
+        if metadata is None:
+            raise FileNotFoundError(f"missing revision metadata: {revision_id}")
+        return markdown, metadata
+
+    def iter_revisions(self, date: str):
+        self.validate_diary_date(date)
+        root = self.revision_root / date
+        if not root.exists():
+            return
+        for path in sorted(root.iterdir()):
+            data = self._load_json(path / "revision.json") if path.is_dir() else None
+            if data is not None:
+                yield data
+
+    def save_correction(self, date: str, correction: dict[str, Any]) -> None:
+        self.validate_diary_date(date)
+        self.validate_correction_id(str(correction["id"]))
+        if str(correction.get("date") or date) != date:
+            raise ValueError("correction date does not match path")
+        atomic_write_json(self.correction_path(date, str(correction["id"])), correction)
+
+    def load_correction(self, date: str, correction_id: str) -> dict[str, Any] | None:
+        return self._load_json(self.correction_path(date, correction_id))
+
+    def delete_correction(self, date: str, correction_id: str) -> None:
+        target = self.correction_path(date, correction_id)
+        root = (self.correction_root / date).resolve()
+        if target.resolve().parent != root:
+            raise ValueError("invalid correction path")
+        target.unlink(missing_ok=True)
+
+    def iter_corrections(self, date: str):
+        self.validate_diary_date(date)
+        root = self.correction_root / date
+        if not root.exists():
+            return
+        for path in sorted(root.glob("*.json")):
+            data = self._load_json(path)
+            if data is not None:
+                yield data
+
+    def update_correction(self, date: str, correction_id: str, **changes: Any) -> dict[str, Any] | None:
+        correction = self.load_correction(date, correction_id)
+        if correction is None:
+            return None
+        correction.update(changes)
+        atomic_write_json(self.correction_path(date, correction_id), correction)
+        return correction
 
     def iter_daily_metadata(self):
         if not self.metadata_root.exists():

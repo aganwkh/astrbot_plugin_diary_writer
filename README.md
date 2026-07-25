@@ -1,6 +1,6 @@
 # AI 日记作家
 
-基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v0.5.0 以 daily JSON 作为唯一事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
+基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v0.6.0 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
 
 ## 命令与权限
 
@@ -67,3 +67,11 @@ v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_w
 - 管理页的补写/重写必须显式配置 `generation_provider_id`，因为管理页请求没有私聊 UMO 可用来选择模型。
 
 离线测试验证了 Plugin Page API 的注册形状与拒绝未认证请求；实际 AstrBot Dashboard 身份中间件、Plugin Page bridge 加载及真机深浅色样式仍为**待生产环境验证**，本仓库不会在离线环境伪造这些运行时行为。
+
+## v0.6 事实纠错、长期归档与完整性
+
+- `/纠正日记 YYYY-MM-DD field "旧值" -> "新值"` 只接受唯一、精确的当前字段值；不会调用 LLM，也不会顺带改写其他事实。事件事实请在 `diary-manager` 按需读取该日 metadata 后选择稳定的 `event_id` / `fact_id` 再修改。无法安全确定正文位置时，Markdown 只追加更正注记，结构化 metadata 与 correction ledger 是当前事实。
+- 每次纠错或回滚都会先保留 revision。revision 记录 parent、导致它的 correction，以及 rollback 的来源和目标；correction 的 `active`、`superseded`、`rolled_back` 状态让历史链可审计。当前检索、Ask Diary、趋势与生命周期只读取已纠正的 daily metadata。
+- `archive_exports/` 保存 ZIP + manifest + SHA-256 校验的手动导出；归档包含日记、reviews、revision/correction、continuity 和非敏感运行状态，不会递归打包历史 ZIP，也不会恢复设置、密码或实例配置。恢复先校验并创建 `pre_restore_snapshots/` 快照（保留最近 5 份），且在全局维护锁内进行；ZIP 路径、符号链接、文件数量、大小和压缩比均受限。
+- 人物/项目生命周期、角色 reflection 与 integrity audit 都只读取 daily 当前事实。生命周期只给出“活跃 / 最近未观察到 / 未知”等观察性描述；reflection 明确标记 `subjective`，保存稳定 `source_refs`，不参与事实检索或统计；audit 的安全修复只补可确定的结构/兼容字段，绝不从 Markdown 猜测事实。
+- 管理页新增纠错/修订查看与 diff/回滚、备份校验恢复、人物和项目轨迹、reflection 与完整性检查入口。所有数据按需经 AstrBot Dashboard 鉴权 API 读取，页面以 DOM `textContent` 渲染，不把日记内容或凭据放进静态文件。

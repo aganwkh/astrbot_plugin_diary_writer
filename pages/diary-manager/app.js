@@ -4,6 +4,7 @@ import {
   renderEntities, renderEntityTimeline, renderEntry, renderGenerate, renderOverview,
   renderSearch, renderSearchResults, renderShell, renderTimeline, renderTrends,
 } from "./render.js";
+import { renderV06 } from "./v06.js";
 
 function setNotice(message) {
   updateState({ notice: message });
@@ -96,6 +97,7 @@ function renderAll() {
   renderSearch(search, openEntry, showEntities);
   renderTrends(state);
   renderGenerate(generate);
+  renderV06(setNotice);
   renderEntry(state, closeEntry);
 }
 

@@ -10,6 +10,7 @@ from math import isfinite
 from typing import Any
 
 from .config import DiaryConfig
+from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .storage import DiaryStorage, atomic_write_json
 
 
@@ -43,8 +44,27 @@ def period_for_date(kind: str, value: date) -> str:
     raise ValueError("review kind must be weekly, monthly, or yearly")
 
 
+def _canonical_event(event: Any) -> Any:
+    """IDs and fact-record mirrors are technical storage, not changed facts."""
+    if not isinstance(event, dict):
+        return event
+    result = {key: value for key, value in event.items() if key not in {"event_id", "fact_records"}}
+    facts = result.get("facts")
+    if not isinstance(facts, list):
+        facts = []
+    if not facts and isinstance(event.get("fact_records"), list):
+        facts = [str(item.get("value") or "") for item in event["fact_records"] if isinstance(item, dict) and str(item.get("value") or "")]
+    result["facts"] = facts
+    return result
+
+
 def core_fingerprint(metadata: dict[str, Any]) -> str:
-    core = {field: metadata.get(field) for field in CORE_FIELDS}
+    list_fields = {"topics", "people", "projects", "events", "highlights", "unresolved", "ongoing_topics", "memory_ids"}
+    core = {
+        field: ([] if field in list_fields and metadata.get(field) is None else ("" if field in {"title", "mood"} and metadata.get(field) is None else metadata.get(field)))
+        for field in CORE_FIELDS
+    }
+    core["events"] = [_canonical_event(item) for item in core.get("events", [])] if isinstance(core.get("events"), list) else core.get("events")
     return sha256(json.dumps(core, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -54,9 +74,10 @@ def review_fingerprint(metadata: dict[str, Any]) -> str:
 
 
 class ReviewService:
-    def __init__(self, storage: DiaryStorage, config: DiaryConfig | None = None):
+    def __init__(self, storage: DiaryStorage, config: DiaryConfig | None = None, gate: MaintenanceGate | None = None):
         self.storage = storage
         self.config = config or DiaryConfig()
+        self.gate = gate or GLOBAL_MAINTENANCE_GATE
         self._locks: dict[str, asyncio.Lock] = {}
 
     def collect(self, kind: str, period: str) -> tuple[list[dict[str, Any]], list[str], list[str]]:
@@ -66,6 +87,11 @@ class ReviewService:
         return covered, [str(item["date"]) for item in covered], [value for value, item in zip(dates, daily) if item is None]
 
     async def generate(self, kind: str, period: str, provider: Any, force: bool = False) -> str | None:
+        """Write a review only while no archive restore owns the data root."""
+        async with self.gate.operation():
+            return await self._generate_unlocked(kind, period, provider, force)
+
+    async def _generate_unlocked(self, kind: str, period: str, provider: Any, force: bool = False) -> str | None:
         key = f"{kind}:{period}"
         async with self._locks.setdefault(key, asyncio.Lock()):
             if not force and self.storage.has_review(kind, period):
@@ -91,22 +117,32 @@ class ReviewService:
                 return None
 
     async def after_daily_written(self, diary_date: date, provider: Any, reason: str) -> None:
+        """Update derived review state as one restore-safe operation."""
+        async with self.gate.operation():
+            await self._after_daily_written_unlocked(diary_date, provider, reason)
+
+    async def _after_daily_written_unlocked(self, diary_date: date, provider: Any, reason: str) -> None:
         self.mark_daily_changed(diary_date, reason)
         today = date.today()
         for kind in ("weekly", "monthly", "yearly"):
             period = period_for_date(kind, diary_date)
             dates = period_dates(kind, period)
             if dates[-1] == diary_date and dates[-1] < today and not self.storage.has_review(kind, period):
-                await self.generate(kind, period, provider)
+                await self._generate_unlocked(kind, period, provider)
 
     async def catch_up(self, provider: Any) -> None:
+        """Run the stale scan and any catch-up writes under one gate acquisition."""
+        async with self.gate.operation():
+            await self._catch_up_unlocked(provider)
+
+    async def _catch_up_unlocked(self, provider: Any) -> None:
         periods = {(kind, period_for_date(kind, date.fromisoformat(str(item["date"])))) for item in self.storage.iter_daily_metadata() for kind in ("weekly", "monthly", "yearly")}
         for kind, period in sorted(periods):
             if period_dates(kind, period)[-1] >= date.today():
                 continue
             self.refresh_staleness(kind, period)
             if not self.storage.has_review(kind, period):
-                await self.generate(kind, period, provider)
+                await self._generate_unlocked(kind, period, provider)
 
     def mark_daily_changed(self, diary_date: date, reason: str, core_changed: bool = True) -> None:
         if not core_changed:

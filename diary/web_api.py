@@ -13,9 +13,14 @@ from .retrieval import search_daily, timeline
 from .service import diary_changed
 from .storage import DiaryStorage
 from .trends import build_trends
+from .corrections import CorrectionError, CorrectionService
+from .archives import ArchiveError, ArchiveService
+from .lifecycle import lifecycle, all_lifecycles
+from .reflections import ReflectionService
+from .integrity import IntegrityAudit
 
 try:  # Keep the service modules importable by the offline test suite.
-    from astrbot.api.web import error_response, json_response, request
+    from astrbot.api.web import error_response, file_response, json_response, request
 except ImportError:  # pragma: no cover - production always provides astrbot.api.web
     request = None
 
@@ -25,6 +30,9 @@ except ImportError:  # pragma: no cover - production always provides astrbot.api
     def error_response(message: str, status_code: int = 400):
         return {"error": message, "status_code": status_code}
 
+    def file_response(path: Path, filename: str, content_type: str):
+        return {"path": str(path), "filename": filename, "content_type": content_type}
+
 
 PLUGIN_NAME = "astrbot_plugin_diary_writer"
 KINDS = frozenset({"daily", "weekly", "monthly", "yearly"})
@@ -33,6 +41,7 @@ MAX_LIMIT = 100
 MAX_QUERY_LENGTH = 200
 MAX_CALENDAR_DAYS = 366
 MAX_TREND_DAYS = 3660
+MAX_ARCHIVE_NAME = re.compile(r"(?:diary-export|pre-restore)-\d{8}T\d{12}Z\.zip")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -117,6 +126,15 @@ class DiaryWebApi:
     ):
         self.context, self.config, self.storage = context, config, storage
         self.service, self.reviews, self.after_daily = service, reviews, after_daily
+        self.corrections = CorrectionService(storage, reviews)
+        self.archives = ArchiveService(storage, {
+            key: getattr(config, key) for key in (
+                "persona_preset", "persona_name", "user_nickname", "diary_voice", "auto_write_enabled",
+                "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
+            ) if hasattr(config, key)
+        })
+        self.reflections = ReflectionService(storage, config)
+        self.integrity = IntegrityAudit(storage)
 
     def register(self) -> None:
         register = getattr(self.context, "register_web_api", None)
@@ -131,6 +149,23 @@ class DiaryWebApi:
             ("timeline", self.timeline, ["GET"], "Diary Writer timeline"),
             ("trends", self.trends, ["GET"], "Diary Writer trends"),
             ("generate", self.generate, ["POST"], "Generate Diary Writer entry"),
+            ("corrections", self.corrections_list, ["GET"], "Diary Writer corrections"),
+            ("correction", self.correction, ["POST"], "Correct a diary fact"),
+            ("revisions", self.revisions, ["GET"], "Diary Writer revisions"),
+            ("revision", self.revision, ["GET"], "Diary Writer revision"),
+            ("revision-diff", self.revision_diff, ["GET"], "Diary Writer revision diff"),
+            ("rollback", self.rollback, ["POST"], "Rollback a diary revision"),
+            ("archives", self.archives_list, ["GET"], "Diary Writer archives"),
+            ("archive-export", self.archive_export, ["POST"], "Export diary archive"),
+            ("archive-verify", self.archive_verify, ["GET"], "Verify diary archive"),
+            ("archive-download", self.archive_download, ["GET"], "Download diary archive"),
+            ("archive-restore", self.archive_restore, ["POST"], "Restore diary archive"),
+            ("lifecycle", self.lifecycle, ["GET"], "Diary Writer lifecycle"),
+            ("lifecycles", self.lifecycles, ["GET"], "Diary Writer lifecycle list"),
+            ("reflections", self.reflections_list, ["GET"], "Diary Writer reflections"),
+            ("reflection-generate", self.reflection_generate, ["POST"], "Generate diary reflection"),
+            ("integrity", self.integrity_check, ["GET"], "Diary Writer integrity"),
+            ("integrity-repair", self.integrity_repair, ["POST"], "Safely repair diary metadata"),
         )
         for suffix, handler, methods, description in routes:
             register(f"/{PLUGIN_NAME}/diary-manager/{suffix}", handler, methods, description)
@@ -144,6 +179,36 @@ class DiaryWebApi:
     @staticmethod
     def _query(name: str, default: Any = None) -> Any:
         return request.query.get(name, default) if request is not None else default
+
+    @staticmethod
+    async def _payload() -> dict[str, Any] | None:
+        try:
+            value = await request.json(default={}) if request is not None else {}
+        except (TypeError, ValueError, UnicodeDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _archive_path(storage: DiaryStorage, value: Any) -> Path:
+        name = str(value or "")
+        if not MAX_ARCHIVE_NAME.fullmatch(name):
+            raise ValueError("invalid archive name")
+        roots = (storage.root / "archive_exports", storage.root / "pre_restore_snapshots")
+        found = []
+        for root in roots:
+            path = root / name
+            # is_file follows links, so a valid basename is not sufficient.
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.resolve().parent != root.resolve():
+                    continue
+            except OSError:
+                continue
+            found.append(path)
+        if len(found) != 1:
+            raise ValueError("archive not found")
+        return found[0]
 
     async def overview(self):
         if (denied := self._identity_error()) is not None:
@@ -267,6 +332,223 @@ class DiaryWebApi:
         except ValueError as exc:
             return error_response(str(exc), status_code=400)
 
+    async def corrections_list(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            diary_date = _period("daily", self._query("date"))
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        return json_response({"date": diary_date, "corrections": list(self.storage.iter_corrections(diary_date) or ())})
+
+    async def correction(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        payload = await self._payload()
+        if payload is None:
+            return error_response("JSON object required", status_code=400)
+        try:
+            diary_date = _period("daily", payload.get("date"))
+            old_value, new_value = _required_text(payload.get("old_value"), "old_value"), _required_text(payload.get("new_value"), "new_value")
+            event_id, fact_id = str(payload.get("event_id") or ""), str(payload.get("fact_id") or "")
+            if bool(event_id) != bool(fact_id):
+                raise ValueError("event_id and fact_id must be supplied together")
+            if event_id:
+                result = await self.corrections.replace_event_fact(diary_date, event_id, fact_id, old_value, new_value, source="webui")
+            else:
+                result = await self.corrections.replace(diary_date, _required_text(payload.get("field"), "field"), old_value, new_value, source="webui")
+        except (ValueError, CorrectionError, OSError):
+            return error_response("invalid or ambiguous deterministic correction", status_code=400)
+        return json_response({"date": diary_date, "correction": result})
+
+    async def revisions(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            diary_date = _period("daily", self._query("date"))
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        return json_response({"date": diary_date, "current_revision_id": self.storage.load_revision_state(diary_date).get("current_revision_id", ""), "revisions": list(self.storage.iter_revisions(diary_date) or ())})
+
+    async def revision(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            diary_date = _period("daily", self._query("date")); revision_id = str(self._query("revision_id") or "")
+            self.storage.validate_revision_id(revision_id)
+            revision = self.storage.load_revision(diary_date, revision_id)
+            if revision is None:
+                raise ValueError("revision not found")
+            markdown, metadata = self.storage.load_revision_contents(diary_date, revision_id)
+        except (ValueError, OSError):
+            return error_response("revision not found", status_code=404)
+        return json_response({"revision": revision, "markdown": markdown, "metadata": metadata})
+
+    async def revision_diff(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            diary_date = _period("daily", self._query("date")); left, right = str(self._query("from") or ""), str(self._query("to") or "")
+            self.storage.validate_revision_id(left); self.storage.validate_revision_id(right)
+            left_markdown, left_metadata = self.storage.load_revision_contents(diary_date, left)
+            right_markdown, right_metadata = self.storage.load_revision_contents(diary_date, right)
+        except (ValueError, OSError):
+            return error_response("revision not found", status_code=404)
+        return json_response({
+            "date": diary_date, "from": left, "to": right,
+            "markdown_changed": left_markdown != right_markdown,
+            "metadata_changed": left_metadata != right_metadata,
+            "before": {"markdown": left_markdown, "metadata": left_metadata},
+            "after": {"markdown": right_markdown, "metadata": right_metadata},
+        })
+
+    async def rollback(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        payload = await self._payload()
+        if payload is None:
+            return error_response("JSON object required", status_code=400)
+        try:
+            diary_date = _period("daily", payload.get("date")); revision_id = str(payload.get("revision_id") or "")
+            result = await self.corrections.rollback(diary_date, revision_id, source="webui")
+        except (ValueError, CorrectionError, OSError):
+            return error_response("invalid rollback target", status_code=400)
+        return json_response({"date": diary_date, "correction": result})
+
+    async def archives_list(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        rows = []
+        for root, kind in ((self.archives.export_root, "export"), (self.archives.pre_restore_root, "pre_restore")):
+            for path in sorted(root.glob("*.zip"), reverse=True) if root.exists() else ():
+                if MAX_ARCHIVE_NAME.fullmatch(path.name) and not path.is_symlink() and path.is_file():
+                    rows.append({"name": path.name, "kind": kind, "size": path.stat().st_size})
+        return json_response({"archives": rows})
+
+    async def archive_export(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        if await self._payload() is None:
+            return error_response("JSON object required", status_code=400)
+        try:
+            path = await self.archives.export()
+        except Exception:
+            return error_response("archive export failed", status_code=500)
+        return json_response({"archive": path.name})
+
+    async def archive_verify(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            manifest = self.archives.verify(self._archive_path(self.storage, self._query("archive")))
+        except (ValueError, ArchiveError):
+            return error_response("archive verification failed", status_code=400)
+        return json_response({"valid": True, "file_count": len(manifest.get("files", [])), "created_at": str(manifest.get("created_at") or ""), "plugin_version": str(manifest.get("plugin_version") or "")})
+
+    async def archive_download(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            path = self._archive_path(self.storage, self._query("archive"))
+            self.archives.verify(path)
+        except (ValueError, ArchiveError):
+            return error_response("archive is unavailable", status_code=404)
+        return file_response(path, filename=path.name, content_type="application/zip")
+
+    async def archive_restore(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        payload = await self._payload()
+        if payload is None or not isinstance(payload.get("dry_run", False), bool):
+            return error_response("JSON object and boolean dry_run required", status_code=400)
+        try:
+            result = await self.archives.restore(self._archive_path(self.storage, payload.get("archive")), dry_run=payload["dry_run"])
+        except (ValueError, ArchiveError):
+            return error_response("archive restore failed", status_code=400)
+        return json_response(result)
+
+    async def lifecycle(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        field, value = str(self._query("field") or ""), str(self._query("value") or "").strip()
+        if field not in {"people", "projects"} or not value or len(value) > MAX_QUERY_LENGTH:
+            return error_response("invalid lifecycle request", status_code=400)
+        try:
+            result = lifecycle(self.storage, value, field)
+        except ValueError:
+            return error_response("invalid lifecycle request", status_code=400)
+        return json_response({"field": field, "value": value, "lifecycle": result})
+
+    async def lifecycles(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        field = str(self._query("field") or "")
+        if field not in {"people", "projects"}:
+            return error_response("field must be people or projects", status_code=400)
+        try:
+            return json_response({"field": field, "entries": all_lifecycles(self.storage, field)})
+        except ValueError:
+            return error_response("invalid lifecycle request", status_code=400)
+
+    async def reflections_list(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            kind, period = str(self._query("kind") or ""), _period(str(self._query("kind") or ""), self._query("period"))
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        if kind not in {"monthly", "yearly"}:
+            return error_response("reflection kind must be monthly or yearly", status_code=400)
+        metadata = self.storage.load_reflection_metadata(kind, period)
+        if metadata is None:
+            return json_response({"kind": kind, "period": period, "reflection": None})
+        try:
+            markdown = self.storage.reflection_path(kind, period).read_text(encoding="utf-8")
+        except OSError:
+            return error_response("reflection could not be read", status_code=500)
+        return json_response({"kind": kind, "period": period, "markdown": markdown, "metadata": metadata})
+
+    async def reflection_generate(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        payload = await self._payload()
+        if payload is None or not isinstance(payload.get("force", False), bool):
+            return error_response("JSON object and boolean force required", status_code=400)
+        try:
+            kind, period = str(payload.get("kind") or ""), _period(str(payload.get("kind") or ""), payload.get("period"))
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        if kind not in {"monthly", "yearly"}:
+            return error_response("reflection kind must be monthly or yearly", status_code=400)
+        provider_id = str(getattr(self.config, "generation_provider_id", "") or "")
+        if not provider_id:
+            return error_response("generation_provider_id is not configured", status_code=400)
+        try:
+            provider = self.context.get_provider_by_id(provider_id)
+            if provider is None or not await self.reflections.generate(kind, period, provider, force=payload["force"]):
+                raise RuntimeError
+        except Exception:
+            return error_response("reflection generation failed; inspect generation state", status_code=500)
+        return json_response({"kind": kind, "period": period, "generated": True})
+
+    async def integrity_check(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        try:
+            return json_response(self.integrity.check())
+        except Exception:
+            return error_response("integrity check failed", status_code=500)
+
+    async def integrity_repair(self):
+        if (denied := self._identity_error()) is not None:
+            return denied
+        if await self._payload() is None:
+            return error_response("JSON object required", status_code=400)
+        try:
+            return json_response(self.integrity.safe_repair())
+        except Exception:
+            return error_response("safe integrity repair failed", status_code=500)
+
     async def generate(self):
         if (denied := self._identity_error()) is not None:
             return denied
@@ -291,9 +573,19 @@ class DiaryWebApi:
             if provider is None:
                 raise RuntimeError("configured provider was not found")
             if kind == "daily":
-                result = await self.service.generate(date.fromisoformat(period), provider, force=force)
-                if diary_changed(result) and self.after_daily is not None:
-                    await self.after_daily(date.fromisoformat(period), provider, "daily_rewritten" if force else "daily_added")
+                generate_unlocked = getattr(self.service, "_generate_unlocked", None)
+                gate = getattr(self.service, "gate", None)
+                if callable(generate_unlocked) and gate is not None:
+                    # The daily pair and the derived review state must be one restore-safe unit.
+                    async with gate.operation():
+                        result = await generate_unlocked(date.fromisoformat(period), provider, force=force)
+                        if diary_changed(result) and self.after_daily is not None:
+                            await self.after_daily(date.fromisoformat(period), provider, "daily_rewritten" if force else "daily_added")
+                else:
+                    # Offline API stubs do not expose the internal orchestration hook.
+                    result = await self.service.generate(date.fromisoformat(period), provider, force=force)
+                    if diary_changed(result) and self.after_daily is not None:
+                        await self.after_daily(date.fromisoformat(period), provider, "daily_rewritten" if force else "daily_added")
             else:
                 result = await self.reviews.generate(kind, period, provider, force=force)
         except Exception:
@@ -323,6 +615,13 @@ def _limit(value: Any) -> int:
     if not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f"limit must be an integer between 1 and {MAX_LIMIT}")
     return limit
+
+
+def _required_text(value: Any, name: str) -> str:
+    text = str(value or "")
+    if not text or len(text) > MAX_QUERY_LENGTH:
+        raise ValueError(f"{name} must contain 1 to {MAX_QUERY_LENGTH} characters")
+    return text
 
 
 def _reference(item: Any) -> dict[str, str]:

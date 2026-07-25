@@ -10,6 +10,7 @@ from .continuity import update_continuity
 from .events import cluster_memories
 from .migration import migrate_legacy_markdown
 from .memory_source import MemorySource, MemorySourceError
+from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .models import GenerationState
 from .prompts import build_messages, parse_diary_response
 from .storage import DiaryStorage
@@ -31,13 +32,20 @@ def diary_changed(result: str | None) -> bool:
 
 
 class DiaryService:
-    def __init__(self, config: DiaryConfig, storage: DiaryStorage, source: MemorySource):
+    def __init__(self, config: DiaryConfig, storage: DiaryStorage, source: MemorySource, gate: MaintenanceGate | None = None):
         self.config = config
         self.storage = storage
         self.source = source
+        self.gate = gate or GLOBAL_MAINTENANCE_GATE
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def generate(self, diary_date: date, provider: Any, force: bool = False) -> DiaryGenerationResult | None:
+        """Write a daily only while no restore transaction owns the data root."""
+        async with self.gate.operation():
+            return await self._generate_unlocked(diary_date, provider, force)
+
+    async def _generate_unlocked(self, diary_date: date, provider: Any, force: bool = False) -> DiaryGenerationResult | None:
+        """Generate while the caller owns ``gate.operation()`` exactly once."""
         date_text = diary_date.isoformat()
         lock = self._locks.setdefault(date_text, asyncio.Lock())
         async with lock:
