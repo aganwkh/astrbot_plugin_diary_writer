@@ -48,6 +48,7 @@ class DiaryConfig:
     inactive_minutes: int = 90
     fallback_inactive_minutes: int = 60
     cron_start_delay_minutes: int = 30
+    on_this_day_reminder_enabled: bool = False
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "DiaryConfig":
@@ -69,6 +70,7 @@ class DiaryConfig:
             inactive_minutes=max(1, int(raw.get("inactive_minutes", 90) or 90)),
             fallback_inactive_minutes=max(1, int(raw.get("fallback_inactive_minutes", 60) or 60)),
             cron_start_delay_minutes=max(0, min(59, int(raw.get("cron_start_delay_minutes", 30) or 0))),
+            on_this_day_reminder_enabled=bool(raw.get("on_this_day_reminder_enabled", False)),
         )
 
     @property

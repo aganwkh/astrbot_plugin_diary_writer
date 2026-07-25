@@ -1,0 +1,10 @@
+{
+  "pages": {
+    "diary-manager": {
+      "title": "日记管理",
+      "description": "查看私密日记、回顾、趋势与生成状态。",
+      "heading": "日记管理",
+      "refresh": "刷新"
+    }
+  }
+}

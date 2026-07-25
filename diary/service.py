@@ -16,6 +16,20 @@ from .storage import DiaryStorage
 from .website_sync import WebsiteSync
 
 
+class DiaryGenerationResult(str):
+    """Path-like result that records whether this call changed daily facts."""
+
+    def __new__(cls, path: str, changed: bool):
+        result = super().__new__(cls, path)
+        result.changed = changed
+        return result
+
+
+def diary_changed(result: str | None) -> bool:
+    """Treat legacy/mocked string results as changed while preserving real no-op calls."""
+    return bool(result) and bool(getattr(result, "changed", True))
+
+
 class DiaryService:
     def __init__(self, config: DiaryConfig, storage: DiaryStorage, source: MemorySource):
         self.config = config
@@ -23,17 +37,17 @@ class DiaryService:
         self.source = source
         self._locks: dict[str, asyncio.Lock] = {}
 
-    async def generate(self, diary_date: date, provider: Any, force: bool = False) -> str | None:
+    async def generate(self, diary_date: date, provider: Any, force: bool = False) -> DiaryGenerationResult | None:
         date_text = diary_date.isoformat()
         lock = self._locks.setdefault(date_text, asyncio.Lock())
         async with lock:
             return await self._generate_locked(diary_date, provider, force)
 
-    async def _generate_locked(self, diary_date: date, provider: Any, force: bool) -> str | None:
+    async def _generate_locked(self, diary_date: date, provider: Any, force: bool) -> DiaryGenerationResult | None:
         date_text = diary_date.isoformat()
         if not force and self.storage.has_any_diary(date_text):
-            migrate_legacy_markdown(self.storage, date_text)
-            return str(self.storage.diary_path(date_text))
+            changed = migrate_legacy_markdown(self.storage, date_text)
+            return DiaryGenerationResult(str(self.storage.diary_path(date_text)), changed)
         state = GenerationState(pending_date=date_text, stage="collecting", updated_at=self._now())
         self.storage.save_generation_state(state)
         try:
@@ -55,7 +69,7 @@ class DiaryService:
                     WebsiteSync(Path(self.config.website_sync_path)).sync(date_text, parsed.markdown, parsed.metadata)
                 except Exception:
                     pass
-            return str(self.storage.diary_path(date_text))
+            return DiaryGenerationResult(str(self.storage.diary_path(date_text)), True)
         except Exception as exc:
             state.stage = "failed"
             state.last_error = str(exc)[:1000]

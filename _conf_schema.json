@@ -28,7 +28,7 @@
     "type": "string",
     "default": "",
     "_special": "select_provider",
-    "hint": "留空时使用触发私聊对应的模型。"
+    "hint": "留空时使用触发私聊对应的模型；v0.5 管理页的补写/重写必须显式配置此项。"
   },
   "persona_preset": {
     "description": "日记预设",
@@ -75,5 +75,11 @@
   },
   "inactive_minutes": {"description":"自动写作静默分钟数","type":"int","default":90},
   "fallback_inactive_minutes": {"description":"04:00兜底静默分钟数","type":"int","default":60},
-  "cron_start_delay_minutes": {"description":"00:00 后开始检查的延迟分钟数","type":"int","default":30}
+  "cron_start_delay_minutes": {"description":"00:00 后开始检查的延迟分钟数","type":"int","default":30},
+  "on_this_day_reminder_enabled": {
+    "description": "主动提醒那年今日",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；仅授权用户的普通私聊首次触发，群聊和命令不会提示。"
+  }
 }

@@ -1,6 +1,6 @@
 # AI 日记作家
 
-基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v0.3.0 同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
+基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v0.5.0 以 daily JSON 作为唯一事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
 
 ## 命令与权限
 
@@ -13,6 +13,8 @@
 | `/测试日记` | 只生成预览草稿，不写任何日记、状态或连续性数据 |
 | `/补写日记 YYYY-MM-DD` | 为没有日记的日期生成日记 |
 | `/重写日记 YYYY-MM-DD` | 重写并保留带时间戳的旧版本备份 |
+| `/补写年记 YYYY` | 从已有 daily JSON 补生成年度回顾 |
+| `/重写年记 YYYY` | 重写年度回顾并保留带时间戳的旧版本备份 |
 
 ## 自动生成
 
@@ -54,3 +56,14 @@ v0.3 数据在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_w
 - 补写、重写或核心 metadata 变化不会覆盖已有总结，只会标记 `summary_stale=true`；用重写命令显式重建，并保留备份。
 - `/问日记 <问题>`、`/那年今日`、`/日记项目 <名称>`、`/日记话题 <名称>` 仅限私聊。Ask Diary 先本地检索，并始终给出来源日期。
 - 手动总结命令：`/补写周记 YYYY-Www`、`/重写周记 YYYY-Www`、`/补写月记 YYYY-MM`、`/重写月记 YYYY-MM`。
+
+## v0.5 长期观察与管理页
+
+- 年记使用自然年，保存独立 Markdown 与 JSON，并与周/月一样保留覆盖日期、缺失日期、来源、`summary_stale`、原子写入、备份和失败状态。`/补写年记 YYYY` 与 `/重写年记 YYYY` 仅限授权私聊。
+- 年记的事件、项目、话题、情绪和数量统计只来自 daily JSON；monthly 仅作为高层叙事与周期变化上下文，不参与事实计数，避免重复统计。
+- 趋势统计只读取 daily metadata：心情评分、常见话题/项目、活跃项目变化、每月日记/事件/未完成事项数量。它是描述性统计，不做心理诊断，也不会写回 daily 或 continuity。
+- `on_this_day_reminder_enabled` 默认关闭。开启后只会在授权用户当天首次发送的普通私聊消息时提示真实的往年同日记录；命令、群聊和后续消息不会触发，监听器不阻断原消息处理。
+- AstrBot 管理端提供 `diary-manager` Plugin Page，用于浏览、搜索、趋势、stale/生成状态、来源证据和手动生成。静态资源不携带日记、人物、项目、证据、凭据或配置；所有私密内容均按需通过 Dashboard 鉴权的 plugin-local API 读取。前端将 API 文本视为不可信数据，以 DOM `textContent` 渲染，不拼接到 `innerHTML`。
+- 管理页的补写/重写必须显式配置 `generation_provider_id`，因为管理页请求没有私聊 UMO 可用来选择模型。
+
+离线测试验证了 Plugin Page API 的注册形状与拒绝未认证请求；实际 AstrBot Dashboard 身份中间件、Plugin Page bridge 加载及真机深浅色样式仍为**待生产环境验证**，本仓库不会在离线环境伪造这些运行时行为。

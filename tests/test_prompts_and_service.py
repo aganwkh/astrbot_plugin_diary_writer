@@ -48,6 +48,18 @@ class FlakyProvider:
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_daily_returns_an_unchanged_result(self):
+        service_module = load_module("diary.service")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = DiaryStorage(Path(temp_dir))
+            storage.diary_path("2026-07-25").parent.mkdir(parents=True, exist_ok=True)
+            storage.diary_path("2026-07-25").write_text("# existing\n", encoding="utf-8")
+            storage.metadata_path("2026-07-25").parent.mkdir(parents=True, exist_ok=True)
+            storage.metadata_path("2026-07-25").write_text('{"date":"2026-07-25"}', encoding="utf-8")
+            result = await service_module.DiaryService(DiaryConfig(), storage, FakeSource()).generate(date(2026, 7, 25), object())
+            self.assertTrue(result)
+            self.assertFalse(service_module.diary_changed(result))
+
     async def test_generation_retries_persists_pair_and_clears_pending_state(self):
         service_module = load_module("diary.service")
         with tempfile.TemporaryDirectory() as temp_dir:

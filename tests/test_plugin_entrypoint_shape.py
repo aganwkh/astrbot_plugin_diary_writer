@@ -8,6 +8,8 @@ class PluginEntrypointShapeTests(unittest.TestCase):
         self.assertIn("get_astrbot_data_path", source)
         self.assertIn("can_access_sensitive_diary", source)
         self.assertIn("self.config.can_auto_write", source)
+        self.assertIn('@filter.command("补写年记")', source)
+        self.assertIn('@filter.command("重写年记")', source)
         self.assertNotIn("/opt" + "/AstrBot", source)
         self.assertNotIn("USER_ID", source)
 

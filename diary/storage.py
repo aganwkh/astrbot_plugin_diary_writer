@@ -37,6 +37,19 @@ def atomic_write_json(path: Path, value: Any) -> None:
     atomic_write_text(path, json.dumps(as_jsonable(value), ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
+def _new_backup_dir(root: Path, *parts: str) -> Path:
+    parent = root.joinpath(*parts)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    for counter in range(1_000):
+        path = parent / (stamp if counter == 0 else f"{stamp}-{counter}")
+        try:
+            path.mkdir(parents=True)
+            return path
+        except FileExistsError:
+            continue
+    raise OSError("could not allocate backup directory")
+
+
 class DiaryStorage:
     def __init__(self, root: Path):
         self.root = root
@@ -50,6 +63,7 @@ class DiaryStorage:
         self.state_path = root / "generation_state.json"
         self.continuity_path = root / "continuity.json"
         self.activity_path = root / "activity.json"
+        self.reminder_state_path = root / "reminder_state.json"
 
     def diary_path(self, date: str) -> Path:
         return self.diary_root / f"{date}.md"
@@ -103,8 +117,7 @@ class DiaryStorage:
             metadata_temp.unlink(missing_ok=True)
 
     def backup_diary(self, date: str) -> Path:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = self.backup_root / date / stamp
+        backup_dir = _new_backup_dir(self.backup_root, date)
         markdown_path = self.diary_path(date)
         metadata_path = self.metadata_path(date)
         if markdown_path.exists():
@@ -121,8 +134,7 @@ class DiaryStorage:
         self._write_pair(markdown_path, metadata_path, markdown, metadata)
 
     def backup_review(self, kind: str, period: str) -> Path:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = self.review_backup_root / kind / period / stamp
+        backup_dir = _new_backup_dir(self.review_backup_root, kind, period)
         markdown_path = self.review_path(kind, period)
         metadata_path = self.review_metadata_path(kind, period)
         if markdown_path.exists():
@@ -177,6 +189,12 @@ class DiaryStorage:
             return str(data.get("last_active_at") or "")
         except (OSError, AttributeError, json.JSONDecodeError):
             return ""
+
+    def save_reminder_state(self, state: dict[str, Any]) -> None:
+        atomic_write_json(self.reminder_state_path, state)
+
+    def load_reminder_state(self) -> dict[str, Any]:
+        return self._load_json(self.reminder_state_path) or {}
 
     @staticmethod
     def _load_dataclass(path: Path, model_type):

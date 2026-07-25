@@ -31,6 +31,8 @@ class ConfigAndPermissionTests(unittest.TestCase):
         settings = config.DiaryConfig.from_mapping({"owner_ids": ["1"]})
         self.assertTrue(permissions.can_access_sensitive_diary(Event("1", "qq:FriendMessage:1"), settings))
         self.assertFalse(permissions.can_access_sensitive_diary(Event("1", "qq:GroupMessage:2"), settings))
+        group_enabled = config.DiaryConfig.from_mapping({"owner_ids": ["1"], "allow_group_commands": ["补写年记"]})
+        self.assertFalse(permissions.can_use_group_command(Event("1", "qq:GroupMessage:2"), group_enabled, "补写年记"))
 
     def test_chihaya_preset_keeps_voice_but_identity_is_configured(self):
         config = load_module("diary.config")

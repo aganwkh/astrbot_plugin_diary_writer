@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Diary Writer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Diary Writer</p>
+          <h1 id="page-title">日记管理</h1>
+          <p id="page-description" class="muted">查看已保存的日记与派生回顾。</p>
+        </div>
+        <button id="refresh" class="button secondary" type="button">刷新</button>
+      </header>
+
+      <p id="notice" class="notice" role="status" aria-live="polite"></p>
+      <nav id="tabs" class="tabs" aria-label="日记管理功能">
+        <button type="button" class="tab is-active" data-tab="overview">概览</button>
+        <button type="button" class="tab" data-tab="timeline">时间线</button>
+        <button type="button" class="tab" data-tab="search">搜索</button>
+        <button type="button" class="tab" data-tab="trends">趋势</button>
+        <button type="button" class="tab" data-tab="generate">生成</button>
+      </nav>
+
+      <section id="overview-panel" class="panel" data-panel="overview"></section>
+      <section id="timeline-panel" class="panel is-hidden" data-panel="timeline"></section>
+      <section id="search-panel" class="panel is-hidden" data-panel="search"></section>
+      <section id="trends-panel" class="panel is-hidden" data-panel="trends"></section>
+      <section id="generate-panel" class="panel is-hidden" data-panel="generate"></section>
+      <section id="entry-panel" class="panel is-hidden" aria-live="polite"></section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

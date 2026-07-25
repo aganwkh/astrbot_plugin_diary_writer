@@ -49,6 +49,10 @@ class CronManager:
 class Context:
     def __init__(self):
         self.cron_manager = CronManager()
+        self.web_routes = []
+
+    def register_web_api(self, *route):
+        self.web_routes.append(route)
 
     def get_provider_by_id(self, _provider_id):
         return Provider()
@@ -72,7 +76,7 @@ class Event:
 def load_plugin(data_root: Path):
     logger = types.SimpleNamespace(info=lambda *_: None, warning=lambda *_: None, error=lambda *_: None)
     filter_api = types.SimpleNamespace(
-        EventMessageType=types.SimpleNamespace(ALL="all"),
+        EventMessageType=types.SimpleNamespace(ALL="all", PRIVATE_MESSAGE="private_message"),
         event_message_type=lambda _kind: lambda function: function,
         command=lambda _name: lambda function: function,
     )
@@ -117,6 +121,7 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             await enabled.initialize()
             self.assertEqual([job["cron_expression"] for job in enabled_context.cron_manager.jobs], ["*/10 0-3 * * *", "0 4 * * *"])
             self.assertEqual(enabled_context.cron_manager.deleted, ["old"])
+            self.assertEqual(len(enabled_context.web_routes), 8)
 
             disabled_context = Context()
             disabled = plugin_module.DiaryWriterPlugin(disabled_context, {"owner_ids": ["1"], "auto_write_enabled": False})
@@ -175,5 +180,7 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_weekly(group, "2025-W30"))))
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.backfill_monthly(group, "2025-07"))))
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_monthly(group, "2025-07"))))
+            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.backfill_yearly(group, "2025"))))
+            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_yearly(group, "2025"))))
             self.assertEqual(await collect(plugin.view(stranger, "2026-07-25")), [])
             self.assertIn("TOP SECRET BODY", "".join(await collect(plugin.view(private, "2026-07-25"))))
