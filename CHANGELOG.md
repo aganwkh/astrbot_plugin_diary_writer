@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- 修复 AstrBot cron 接收带时区活动时间时的 datetime 运算异常。
+- 修复网站同步原子写入后索引权限变为仅 root 可读的问题。
+- 修复网站索引的 Markdown 相对路径、旧版日期格式去重与排序兼容。
+- 现有网站索引不可读或损坏时拒绝覆盖，避免丢失历史索引。
+
 ## 1.1.0
 
 - 新增 daily activity tracker、`normal` / `sparse` / `low_activity` 三种 daily 模式，以及 04:10 Daily Finalization 和 v1.1 生效日后的缺口自愈。

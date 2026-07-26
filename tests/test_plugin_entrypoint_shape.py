@@ -23,7 +23,7 @@ class PluginEntrypointShapeTests(unittest.TestCase):
             self.assertIn(f"`/{command}", readme, command)
 
     def test_release_version_is_consistent(self):
-        version = "1.1.0"
+        version = "1.1.1"
         self.assertIn(f"version: {version}", Path("metadata.yaml").read_text(encoding="utf-8"))
         self.assertIn(f'"{version}"', Path("main.py").read_text(encoding="utf-8"))
         self.assertIn(f'"plugin_version": "{version}"', Path("diary/archives.py").read_text(encoding="utf-8"))

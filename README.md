@@ -1,8 +1,8 @@
 # 日记
 
-基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v1.1.0 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
+基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v1.1.1 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
 
-当前稳定版：[v1.1.0](https://github.com/aganwkh/astrbot_plugin_diary_writer/releases/tag/v1.1.0)
+当前稳定版：[v1.1.1](https://github.com/aganwkh/astrbot_plugin_diary_writer/releases/tag/v1.1.1)
 
 ## 已验证兼容性
 

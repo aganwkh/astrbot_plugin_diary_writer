@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from diary.storage import DiaryStorage
@@ -25,3 +25,11 @@ class ScheduleAndMigrationTests(unittest.TestCase):
         self.assertTrue(should_generate(datetime(2026, 7, 26, 4), now - timedelta(minutes=60), 60))
         self.assertFalse(should_run_regular_check(datetime(2026, 7, 26, 0, 20), 30))
         self.assertTrue(should_run_regular_check(datetime(2026, 7, 26, 0, 30), 30))
+
+    def test_schedule_accepts_mixed_aware_and_naive_datetimes(self):
+        from diary.schedule import should_generate
+        shanghai = timezone(timedelta(hours=8))
+        aware_active = datetime(2026, 7, 26, 1, 0, tzinfo=shanghai)
+        naive_now = datetime(2026, 7, 26, 4, 0)
+        self.assertTrue(should_generate(naive_now, aware_active, 60))
+        self.assertTrue(should_generate(naive_now.replace(tzinfo=shanghai), aware_active.replace(tzinfo=None), 60))

@@ -63,7 +63,7 @@ def _message_text(event) -> str:
     return str(value or "").lstrip()
 
 
-@register("astrbot_plugin_diary_writer", "aganwkh", "1.1.0", "私密、可追溯的长期 AI 日记")
+@register("astrbot_plugin_diary_writer", "aganwkh", "1.1.1", "私密、可追溯的长期 AI 日记")
 class DiaryWriterPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
