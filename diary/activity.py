@@ -65,7 +65,9 @@ class DailyActivityTracker:
                 sources.append({"timestamp": str(timestamp), "user_text": str(user_text).strip()})
             activity["conversation_sources"] = sources[: self.saved_rounds]
             sessions = activity.get("private_session_ids") if isinstance(activity.get("private_session_ids"), list) else []
-            if session_id and session_id not in sessions:
+            if session_id in sessions:
+                sessions.remove(session_id)
+            if session_id:
                 sessions.append(session_id)
             activity["private_session_ids"] = sessions
             self.storage.save_daily_activity(date_text, activity)

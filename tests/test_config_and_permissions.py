@@ -34,13 +34,12 @@ class ConfigAndPermissionTests(unittest.TestCase):
         group_enabled = config.DiaryConfig.from_mapping({"owner_ids": ["1"], "allow_group_commands": ["补写年记"]})
         self.assertFalse(permissions.can_use_group_command(Event("1", "qq:GroupMessage:2"), group_enabled, "补写年记"))
 
-    def test_chihaya_preset_keeps_voice_but_identity_is_configured(self):
+    def test_legacy_plugin_persona_settings_are_ignored(self):
         config = load_module("diary.config")
         settings = config.DiaryConfig.from_mapping({"owner_ids": ["1"], "persona_preset": "chihaya_anon", "user_nickname": "虾仁"})
-        persona = settings.persona
-        self.assertEqual(persona.name, "千早爱音")
-        self.assertEqual(settings.user_nickname, "虾仁")
-        self.assertIn("第一人称", persona.voice)
+        self.assertFalse(hasattr(settings, "persona"))
+        self.assertFalse(hasattr(settings, "persona_preset"))
+        self.assertFalse(hasattr(settings, "user_nickname"))
 
     def test_disabled_auto_write_is_effective(self):
         config = load_module("diary.config")

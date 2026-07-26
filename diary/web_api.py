@@ -123,19 +123,19 @@ class DiaryWebApi:
         service: Any,
         reviews: Any,
         after_daily: Callable[[date, Any, str], Awaitable[None]] | None = None,
+        persona_resolver: Callable[[list[str]], Awaitable[str]] | None = None,
     ):
         self.context, self.config, self.storage = context, config, storage
         self.service, self.reviews, self.after_daily = service, reviews, after_daily
         self.corrections = CorrectionService(storage, reviews)
         self.archives = ArchiveService(storage, {
             key: getattr(config, key) for key in (
-                "persona_preset", "persona_name", "user_nickname", "diary_voice", "auto_write_enabled",
-                "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
+                "auto_write_enabled", "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
                 "low_activity_round_threshold", "sparse_memory_threshold", "recent_context_days",
                 "historical_memory_min_count", "historical_memory_max_count", "reflection_cooldown_days",
             ) if hasattr(config, key)
         })
-        self.reflections = ReflectionService(storage, config)
+        self.reflections = ReflectionService(storage, config, persona_resolver=persona_resolver)
         self.integrity = IntegrityAudit(storage)
 
     def register(self) -> None:

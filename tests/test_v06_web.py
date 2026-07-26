@@ -31,10 +31,6 @@ class Context:
 class Config:
     generation_provider_id = ""
     can_auto_write = True
-    persona_preset = "chihaya_anon"
-    persona_name = ""
-    user_nickname = ""
-    diary_voice = ""
     auto_write_enabled = True
     inactive_minutes = 90
     fallback_inactive_minutes = 60

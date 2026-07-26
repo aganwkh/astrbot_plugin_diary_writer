@@ -18,28 +18,59 @@ def load_module(name):
 
 
 class PromptTests(unittest.TestCase):
-    def test_sparse_prompt_requires_using_available_recent_context(self):
+    def test_all_modes_share_the_configured_main_prompt(self):
         prompts = load_module("diary.prompts")
-        system, material = prompts.build_adaptive_messages(
+        config = DiaryConfig()
+        persona = "你是 AstrBot 当前选择的人格；保持自己的姓名和说话方式。"
+        normal_system, _ = prompts.build_messages("2026-07-25", [], ContinuityState(), config, [], persona)
+        sparse_system, _ = prompts.build_adaptive_messages(
             "2026-07-25",
             "sparse",
             [],
             ContinuityState(),
-            DiaryConfig(),
+            config,
             [],
             [{"memory_id": "recent-1", "occurred_at": "2026-07-23T10:00:00+08:00", "text": "近期记忆"}],
             [],
+            persona,
         )
-        self.assertIn("必须主动实际使用至少 1 条近期记忆", system)
-        self.assertIn("不要求与当天事件强行拼接", system)
-        self.assertIn("不要只把当天少量 memory 扩写成普通事件日报", system)
-        self.assertIn("绝不能改写成今天发生", system)
-        self.assertIn("used_recent_memory_ids", system)
-        self.assertEqual(json.loads(material)["prompt_version"], prompts.ADAPTIVE_PROMPT_VERSION)
+        low_system, _ = prompts.build_adaptive_messages(
+            "2026-07-25", "low_activity", [], ContinuityState(), config, [], [], [{"memory_id": "historical-1"}], persona,
+        )
+        self.assertEqual(normal_system, sparse_system)
+        self.assertEqual(sparse_system, low_system)
+        self.assertIn(persona, normal_system)
+        self.assertIn("AstrBot 当前选中的人格", normal_system)
+        self.assertNotIn("千早爱音", normal_system)
+        self.assertNotIn("虾仁", normal_system)
+        self.assertIn("mode_contract 是素材使用契约", normal_system)
 
-    def test_low_activity_prompt_encourages_available_context_without_forcing_all_candidates(self):
+    def test_markdown_is_bound_by_the_same_fact_and_date_rules(self):
         prompts = load_module("diary.prompts")
-        system, _ = prompts.build_adaptive_messages(
+        system, _ = prompts.build_messages("2026-07-25", [], ContinuityState(), DiaryConfig())
+        self.assertIn("同时约束 markdown 正文与 structured events", system)
+        self.assertIn("不得据此断言某件事当前仍然成立", system)
+        self.assertIn("正文仍须保留该日期", system)
+
+    def test_sparse_contract_requires_recent_context_and_excludes_history(self):
+        prompts = load_module("diary.prompts")
+        _, material = prompts.build_adaptive_messages(
+            "2026-07-25", "sparse", [], ContinuityState(), DiaryConfig(),
+            [{"user_text": "当天私聊"}], [{"memory_id": "recent-1"}], [{"memory_id": "must-not-be-included"}],
+        )
+        payload = json.loads(material)
+        contract = payload["mode_contract"]
+        self.assertEqual(payload["prompt_version"], prompts.UNIFIED_PROMPT_VERSION)
+        self.assertEqual(contract["mode"], "sparse")
+        self.assertEqual(contract["required_usage"]["recent_context_sources"]["minimum_used"], 1)
+        self.assertIn("recent_context_sources", contract["context_only_sources"])
+        self.assertIn("recent_context_sources", contract["preserve_original_date_for"])
+        self.assertIn("historical_memory_sources", contract["forbidden_sources"])
+        self.assertNotIn("historical_memory_sources", payload)
+
+    def test_low_activity_contract_allows_recent_and_frozen_history(self):
+        prompts = load_module("diary.prompts")
+        _, material = prompts.build_adaptive_messages(
             "2026-07-25",
             "low_activity",
             [],
@@ -49,10 +80,27 @@ class PromptTests(unittest.TestCase):
             [{"memory_id": "recent-1"}],
             [{"memory_id": "historical-1"}],
         )
-        self.assertIn("必须主动从 recent_context_sources / historical_memory_sources 中选择至少 1 条实际展开", system)
-        self.assertIn("回忆、自言自语、感慨或自由联想", system)
-        self.assertIn("不要求使用全部候选", system)
-        self.assertIn("必须使用不确定表达", system)
+        payload = json.loads(material)
+        contract = payload["mode_contract"]
+        self.assertEqual(contract["required_usage"]["recent_or_historical"]["minimum_used"], 1)
+        self.assertEqual(
+            contract["preserve_original_date_for"],
+            ["recent_context_sources", "historical_memory_sources"],
+        )
+        self.assertEqual(payload["historical_memory_sources"], [{"memory_id": "historical-1"}])
+
+    def test_normal_contract_only_packages_today_conversation_and_continuity(self):
+        prompts = load_module("diary.prompts")
+        _, material = prompts.build_messages(
+            "2026-07-25", [], ContinuityState(), DiaryConfig(), [{"user_text": "当天私聊"}],
+        )
+        payload = json.loads(material)
+        self.assertEqual(payload["entry_type"], "normal")
+        self.assertEqual(payload["conversation_sources"], [{"user_text": "当天私聊"}])
+        self.assertEqual(payload["mode_contract"]["today_fact_sources"], ["today_events"])
+        self.assertIn("conversation_sources", payload["mode_contract"]["context_only_sources"])
+        self.assertNotIn("recent_context_sources", payload)
+        self.assertNotIn("historical_memory_sources", payload)
 
     def test_parser_removes_unknown_evidence_and_keeps_inference_separate(self):
         prompts = load_module("diary.prompts")
@@ -119,6 +167,32 @@ class FlakyProvider:
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_generation_retries_malformed_json_and_uses_astrbot_persona(self):
+        service_module = load_module("diary.service")
+
+        class Provider:
+            def __init__(self): self.calls = 0; self.systems = []
+            async def text_chat(self, **kwargs):
+                self.calls += 1; self.systems.append(kwargs["system_prompt"])
+                text = "not json" if self.calls == 1 else json.dumps({"markdown": "# ok\n", "events": []})
+                return type("Response", (), {"completion_text": text})()
+
+        async def persona_resolver(sessions):
+            self.assertEqual(sessions, ["qq:FriendMessage:1"])
+            return "ASTRBOT PERSONA"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = DiaryStorage(Path(temp_dir))
+            provider = Provider()
+            service = service_module.DiaryService(
+                DiaryConfig.from_mapping({"provider_retry_count": 1}), storage, FakeSource(),
+                persona_resolver=persona_resolver,
+            )
+            result = await service.generate(date(2026, 7, 25), provider, persona_session_id="qq:FriendMessage:1")
+            self.assertTrue(result)
+            self.assertEqual(provider.calls, 2)
+            self.assertTrue(all("ASTRBOT PERSONA" in value for value in provider.systems))
+
     async def test_existing_daily_returns_an_unchanged_result(self):
         service_module = load_module("diary.service")
         with tempfile.TemporaryDirectory() as temp_dir:

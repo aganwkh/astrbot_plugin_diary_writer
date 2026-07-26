@@ -22,7 +22,7 @@ class ArchiveTests(unittest.TestCase):
     def test_export_manifest_checksums_and_never_nests_archives(self):
         with tempfile.TemporaryDirectory() as temp:
             storage = DiaryStorage(Path(temp)); populate(storage)
-            service = ArchiveService(storage, {"persona_name": "Anon", "owner_ids": ["private"], "livingmemory_db_path": "private"})
+            service = ArchiveService(storage, {"auto_write_enabled": True, "persona_name": "legacy", "owner_ids": ["private"], "livingmemory_db_path": "private"})
             first = asyncio.run(service.export())
             second = asyncio.run(service.export())
             manifest = service.verify(second)
@@ -30,7 +30,8 @@ class ArchiveTests(unittest.TestCase):
             names = {item["path"] for item in manifest["files"]}
             self.assertIn("diaries/2025-07-25.md", names)
             self.assertIn("settings.json", names)
-            self.assertNotIn("owner_ids", json.loads(zipfile.ZipFile(second).read("settings.json")))
+            exported_settings = json.loads(zipfile.ZipFile(second).read("settings.json"))
+            self.assertEqual(exported_settings, {"auto_write_enabled": True})
             self.assertFalse(any(name.startswith("archive_exports/") or name.startswith("pre_restore_snapshots/") for name in names))
             self.assertTrue(first.is_file())
 

@@ -30,31 +30,6 @@
     "_special": "select_provider",
     "hint": "留空时使用触发私聊对应的模型；v1.1 管理页的补写/重写必须显式配置此项。"
   },
-  "persona_preset": {
-    "description": "日记预设",
-    "type": "string",
-    "default": "chihaya_anon",
-    "options": ["chihaya_anon", "factual"],
-    "hint": "千早爱音预设保留原有文风；通用事实预设不使用角色口吻。"
-  },
-  "persona_name": {
-    "description": "角色名覆盖（可选）",
-    "type": "string",
-    "default": "",
-    "hint": "留空时使用所选预设的角色名。"
-  },
-  "user_nickname": {
-    "description": "日记中的用户昵称",
-    "type": "string",
-    "default": "虾仁",
-    "hint": "仅用于生成文本；不用于授权、路径或模型选择。"
-  },
-  "diary_voice": {
-    "description": "日记口吻覆盖（可选）",
-    "type": "text",
-    "default": "",
-    "hint": "留空时使用所选预设的口吻。"
-  },
   "website_sync_enabled": {
     "description": "启用网站镜像同步",
     "type": "bool",

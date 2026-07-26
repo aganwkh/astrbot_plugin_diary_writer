@@ -5,24 +5,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-@dataclass(frozen=True)
-class Persona:
-    name: str
-    voice: str
-
-
-PRESETS = {
-    "chihaya_anon": Persona(
-        name="千早爱音",
-        voice="用第一人称书写，自然、温暖，带一点轻松吐槽和小得意；不是工作报告。",
-    ),
-    "factual": Persona(
-        name="",
-        voice="使用克制、清晰的第一人称事实日记口吻，不虚构情节或情绪。",
-    ),
-}
-
-
 def _string_list(value: Any) -> list[str]:
     if isinstance(value, str):
         value = value.split(",")
@@ -38,10 +20,6 @@ class DiaryConfig:
     auto_write_enabled: bool = True
     livingmemory_db_path: str = ""
     generation_provider_id: str = ""
-    persona_preset: str = "chihaya_anon"
-    persona_name: str = ""
-    user_nickname: str = "虾仁"
-    diary_voice: str = ""
     website_sync_enabled: bool = False
     website_sync_path: str = ""
     provider_retry_count: int = 2
@@ -59,17 +37,12 @@ class DiaryConfig:
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> "DiaryConfig":
         raw = raw or {}
-        preset = str(raw.get("persona_preset", "chihaya_anon") or "chihaya_anon")
         return cls(
             owner_ids=tuple(_string_list(raw.get("owner_ids", []))),
             allow_group_commands=tuple(_string_list(raw.get("allow_group_commands", ["日记状态"]))),
             auto_write_enabled=bool(raw.get("auto_write_enabled", True)),
             livingmemory_db_path=str(raw.get("livingmemory_db_path", "") or "").strip(),
             generation_provider_id=str(raw.get("generation_provider_id", "") or "").strip(),
-            persona_preset=preset if preset in PRESETS else "factual",
-            persona_name=str(raw.get("persona_name", "") or "").strip(),
-            user_nickname=str(raw.get("user_nickname", "虾仁") or "").strip(),
-            diary_voice=str(raw.get("diary_voice", "") or "").strip(),
             website_sync_enabled=bool(raw.get("website_sync_enabled", False)),
             website_sync_path=str(raw.get("website_sync_path", "") or "").strip(),
             provider_retry_count=max(0, min(5, int(raw.get("provider_retry_count", 2) or 0))),
@@ -84,11 +57,6 @@ class DiaryConfig:
             historical_memory_max_count=max(1, min(3, int(raw.get("historical_memory_max_count", 3) or 3))),
             reflection_cooldown_days=max(1, min(365, int(raw.get("reflection_cooldown_days", 30) or 30))),
         )
-
-    @property
-    def persona(self) -> Persona:
-        preset = PRESETS[self.persona_preset]
-        return Persona(self.persona_name or preset.name, self.diary_voice or preset.voice)
 
     def livingmemory_path(self, data_root: Path) -> Path:
         if self.livingmemory_db_path:

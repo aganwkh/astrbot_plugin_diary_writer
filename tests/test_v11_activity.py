@@ -61,6 +61,8 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
                 return []
 
             def read_range(self, *_args, **_kwargs):
+                if not self.read_history:
+                    raise AssertionError("rewrite must use saved low-activity recent sources")
                 return []
 
             def read_before(self, _day, session_ids, limit=500):
@@ -91,12 +93,17 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(metadata["entry_type"], "low_activity")
             self.assertEqual(metadata["conversation_sources"][0]["user_text"], "今天很累")
             self.assertEqual(metadata["historical_memory_candidate_ids"], ["old-memory"])
+            original_historical_sources = metadata["historical_memory_sources"]
             self.assertEqual(storage.load_reflection_usage()["old-memory"]["reflection_count"], 1)
             self.assertFalse(storage.daily_activity_path("2026-07-25").exists())
 
             source.read_history = False
             self.assertTrue(await service.generate(date(2026, 7, 25), Provider(), force=True))
-            self.assertEqual(storage.load_metadata("2026-07-25")["historical_memory_candidate_ids"], ["old-memory"])
+            rewritten = storage.load_metadata("2026-07-25")
+            self.assertEqual(rewritten["entry_type"], "low_activity")
+            self.assertEqual(rewritten["activity_round_count"], 1)
+            self.assertEqual(rewritten["historical_memory_candidate_ids"], ["old-memory"])
+            self.assertEqual(rewritten["historical_memory_sources"], original_historical_sources)
 
     async def test_failed_low_activity_generation_keeps_activity_for_retry(self):
         class Source:
@@ -152,8 +159,150 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(storage.load_metadata("2026-07-25")["entry_type"], "normal")
             self.assertEqual(normal_source.before_calls, 0)
             self.assertEqual(normal_source.range_calls, 0)
-            self.assertNotIn('"entry_type": "normal"', normal_provider.prompts[0])
+            self.assertIn('"entry_type": "normal"', normal_provider.prompts[0])
             self.assertEqual(storage.load_metadata("2026-07-25")["prompt_version"], NORMAL_PROMPT_VERSION)
+
+    async def test_rewrite_preserves_sparse_contract_without_daily_activity(self):
+        class Source:
+            def __init__(self):
+                self.allow_context_reads = True
+
+            def read_day(self, _day, limit=80):
+                return [SourceMemory("today", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "当天事实")]
+
+            def read_range(self, *_args, **_kwargs):
+                if not self.allow_context_reads:
+                    raise AssertionError("sparse rewrite must reuse frozen recent sources")
+                return [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期事实", session_id="qq:FriendMessage:owner")]
+
+            def read_before(self, *_args, **_kwargs):
+                raise AssertionError("sparse mode must not select historical memories")
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# sparse\n", "title": "sparse", "events": [], "used_recent_memory_ids": ["recent"],
+                })})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            storage.save_daily_activity("2026-07-25", {
+                "round_count": 8,
+                "conversation_sources": [{"timestamp": "2026-07-25T09:00:00+00:00", "user_text": "今天有一点事"}],
+                "private_session_ids": ["qq:FriendMessage:owner"],
+            })
+            source = Source()
+            service = DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, source)
+            self.assertTrue(await service.generate(date(2026, 7, 25), Provider()))
+            original = storage.load_metadata("2026-07-25")
+            self.assertEqual(original["entry_type"], "sparse")
+            self.assertEqual(original["activity_round_count"], 8)
+            self.assertFalse(storage.daily_activity_path("2026-07-25").exists())
+
+            source.allow_context_reads = False
+            self.assertTrue(await service.generate(date(2026, 7, 25), Provider(), force=True))
+            rewritten = storage.load_metadata("2026-07-25")
+            self.assertEqual(rewritten["entry_type"], "sparse")
+            self.assertEqual(rewritten["activity_round_count"], 8)
+            self.assertEqual(rewritten["conversation_sources"], original["conversation_sources"])
+            self.assertEqual(rewritten["recent_context_sources"], original["recent_context_sources"])
+            self.assertEqual(rewritten["private_session_ids"], original["private_session_ids"])
+
+    async def test_rewrite_preserves_normal_contract_without_daily_activity(self):
+        class Source:
+            def read_day(self, _day, limit=80):
+                return [SourceMemory(str(index), datetime(2026, 7, 25, index + 1, tzinfo=timezone.utc), f"事实{index}") for index in range(3)]
+
+            def read_range(self, *_args, **_kwargs):
+                raise AssertionError("normal rewrite must not enter adaptive context collection")
+
+            def read_before(self, *_args, **_kwargs):
+                raise AssertionError("normal rewrite must not select historical memories")
+
+        class Provider:
+            def __init__(self): self.prompts = []
+
+            async def text_chat(self, prompt, **_kwargs):
+                self.prompts.append(prompt)
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# normal\n", "title": "normal", "events": []})})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            storage.save_daily_activity("2026-07-25", {"round_count": 8, "private_session_ids": ["qq:FriendMessage:owner"]})
+            provider = Provider()
+            service = DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, Source())
+            self.assertTrue(await service.generate(date(2026, 7, 25), provider))
+            self.assertFalse(storage.daily_activity_path("2026-07-25").exists())
+
+            self.assertTrue(await service.generate(date(2026, 7, 25), provider, force=True))
+            rewritten = storage.load_metadata("2026-07-25")
+            self.assertEqual(rewritten["entry_type"], "normal")
+            self.assertEqual(rewritten["activity_round_count"], 8)
+            self.assertEqual(rewritten["prompt_version"], NORMAL_PROMPT_VERSION)
+            self.assertIn('"entry_type": "normal"', provider.prompts[-1])
+
+    async def test_adaptive_contract_rejects_missing_required_context_usage(self):
+        class Source:
+            def __init__(self, day): self.day = day
+            def read_day(self, _day, limit=80): return self.day
+            def read_range(self, *_args, **_kwargs):
+                return [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期事实", session_id="qq:FriendMessage:owner")]
+            def read_before(self, *_args, **_kwargs): return []
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# 未使用上下文\n", "title": "invalid", "events": [],
+                    "used_recent_memory_ids": [], "used_historical_memory_ids": [],
+                })})()
+
+        cases = {
+            "sparse": {
+                "round_count": 8,
+                "day": [SourceMemory("today", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "当天事实")],
+            },
+            "low_activity": {"round_count": 1, "day": []},
+        }
+        for expected_mode, case in cases.items():
+            with self.subTest(mode=expected_mode), tempfile.TemporaryDirectory() as temporary:
+                storage = DiaryStorage(Path(temporary))
+                storage.save_daily_activity("2026-07-25", {
+                    "round_count": case["round_count"], "private_session_ids": ["qq:FriendMessage:owner"],
+                })
+                service = DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, Source(case["day"]))
+                self.assertIsNone(await service.generate(date(2026, 7, 25), Provider()))
+                self.assertFalse(storage.diary_path("2026-07-25").exists())
+                state = storage.load_generation_state()
+                self.assertEqual(state.stage, "failed")
+                self.assertIn("did not use required", state.last_error)
+
+    async def test_adaptive_contract_failure_is_retried_before_writing(self):
+        class Source:
+            def read_day(self, _day, limit=80):
+                return [SourceMemory("today", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "当天事实")]
+            def read_range(self, *_args, **_kwargs):
+                return [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "前天的事", session_id="qq:FriendMessage:owner")]
+            def read_before(self, *_args, **_kwargs): return []
+
+        class Provider:
+            def __init__(self): self.calls = 0
+            async def text_chat(self, **_kwargs):
+                self.calls += 1
+                used = [] if self.calls == 1 else ["recent"]
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# sparse\n", "events": [], "used_recent_memory_ids": used,
+                })})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            storage.save_daily_activity("2026-07-25", {
+                "round_count": 8, "private_session_ids": ["qq:FriendMessage:owner"],
+            })
+            provider = Provider()
+            service = DiaryService(DiaryConfig.from_mapping({"provider_retry_count": 1}), storage, Source())
+            self.assertTrue(await service.generate(date(2026, 7, 25), provider))
+            self.assertEqual(provider.calls, 2)
+            self.assertEqual(storage.load_metadata("2026-07-25")["recent_memory_used_ids"], ["recent"])
 
     async def test_empty_provider_events_still_preserve_all_same_day_source_evidence(self):
         class Source:

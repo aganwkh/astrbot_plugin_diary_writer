@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .config import DiaryConfig
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
@@ -73,10 +73,17 @@ def mark_reflections_stale(storage: DiaryStorage, diary_date: str, reason: str) 
 class ReflectionService:
     """Manual monthly/yearly reflection writer.  It never modifies daily data."""
 
-    def __init__(self, storage: DiaryStorage, config: DiaryConfig | None = None, gate: MaintenanceGate | None = None):
+    def __init__(
+        self,
+        storage: DiaryStorage,
+        config: DiaryConfig | None = None,
+        gate: MaintenanceGate | None = None,
+        persona_resolver: Callable[[list[str]], Awaitable[str]] | None = None,
+    ):
         self.storage = storage
         self.config = config or DiaryConfig()
         self.gate = gate or GLOBAL_MAINTENANCE_GATE
+        self.persona_resolver = persona_resolver
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def generate(self, kind: str, period: str, provider: Any, *, force: bool = False) -> str | None:
@@ -98,10 +105,16 @@ class ReflectionService:
                     for item in daily:
                         item_refs, item_snapshots = _source_refs(item)
                         refs.extend(item_refs); snapshots.extend(item_snapshots)
+                    persona_prompt = ""
+                    if self.persona_resolver is not None:
+                        persona_prompt = str(await self.persona_resolver(self.storage.load_private_session_ids()) or "").strip()
+                    system_prompt = "Return JSON only with markdown and reflection. Write a subjective observation, not historical facts. Do not add facts beyond supplied snapshots."
+                    if persona_prompt:
+                        system_prompt = f"# AstrBot current persona\n\n{persona_prompt}\n\n# Reflection task\n\n{system_prompt}"
                     response = await asyncio.wait_for(
                         provider.text_chat(
-                            prompt=json.dumps({"period": period, "facts": snapshots, "persona": {"name": self.config.persona.name, "voice": self.config.persona.voice}}, ensure_ascii=False),
-                            system_prompt="Return JSON only with markdown and reflection. Write a subjective observation, not historical facts. Do not add facts beyond supplied snapshots.",
+                            prompt=json.dumps({"period": period, "facts": snapshots}, ensure_ascii=False),
+                            system_prompt=system_prompt,
                             contexts=[],
                         ),
                         timeout=PROVIDER_TIMEOUT_SECONDS,
@@ -113,7 +126,7 @@ class ReflectionService:
                         raise ReflectionError("provider response has no reflection")
                     metadata = {
                         "kind": kind, "period": period, "subjective": True,
-                        "persona": self.config.persona.name, "persona_preset": self.config.persona_preset,
+                        "persona_source": "astrbot",
                         "reflection": str(data.get("reflection") or markdown), "source_dates": sorted({str(item.get("date")) for item in daily}),
                         "source_refs": refs, "source_facts": snapshots,
                         "source_fingerprints": {str(item["date"]): core_fingerprint(item) for item in daily},

@@ -60,6 +60,9 @@ class Context:
     def get_using_provider(self, umo):
         return Provider()
 
+    def get_config(self, umo=None):
+        return {"provider_settings": {"default_personality": "default-persona"}}
+
 
 class Event:
     def __init__(self, sender="1", origin="qq:FriendMessage:1"):
@@ -118,6 +121,30 @@ async def collect(generator):
 
 
 class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_diary_resolves_the_selected_astrbot_conversation_persona(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            context = Context()
+
+            class Conversations:
+                async def get_curr_conversation_id(self, umo): return "conversation"
+                async def get_conversation(self, umo, conversation_id):
+                    return types.SimpleNamespace(persona_id="selected-persona")
+
+            class Personas:
+                async def resolve_selected_persona(self, **kwargs):
+                    self.kwargs = kwargs
+                    return "selected-persona", {"prompt": "SELECTED ASTRBOT PERSONA"}, None, False
+                async def get_default_persona_v3(self):
+                    return {"prompt": "DEFAULT ASTRBOT PERSONA"}
+
+            context.conversation_manager = Conversations()
+            context.persona_manager = Personas()
+            plugin = plugin_module.DiaryWriterPlugin(context, {"owner_ids": ["1"]})
+            prompt = await plugin._astrbot_persona_prompt(["qq:FriendMessage:1"])
+            self.assertEqual(prompt, "SELECTED ASTRBOT PERSONA")
+            self.assertEqual(context.persona_manager.kwargs["conversation_persona_id"], "selected-persona")
+
     async def test_entrypoint_loads_under_astrbot_package_namespace(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(

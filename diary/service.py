@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .config import DiaryConfig
 from .continuity import update_continuity
@@ -13,7 +13,7 @@ from .migration import migrate_legacy_markdown
 from .memory_source import MemorySource
 from .models import DiaryEvent, DiaryMetadata, GenerationState, SourceMemory
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
-from .prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION, build_adaptive_messages, build_messages, parse_diary_response
+from .prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION, ParsedDiary, build_adaptive_messages, build_messages, parse_diary_response
 from .storage import DiaryStorage
 from .website_sync import WebsiteSync
 
@@ -35,26 +35,34 @@ def diary_changed(result: str | None) -> bool:
 
 
 class DiaryService:
-    def __init__(self, config: DiaryConfig, storage: DiaryStorage, source: MemorySource, gate: MaintenanceGate | None = None):
+    def __init__(
+        self,
+        config: DiaryConfig,
+        storage: DiaryStorage,
+        source: MemorySource,
+        gate: MaintenanceGate | None = None,
+        persona_resolver: Callable[[list[str]], Awaitable[str]] | None = None,
+    ):
         self.config = config
         self.storage = storage
         self.source = source
         self.gate = gate or GLOBAL_MAINTENANCE_GATE
+        self.persona_resolver = persona_resolver
         self._locks: dict[str, asyncio.Lock] = {}
 
-    async def generate(self, diary_date: date, provider: Any, force: bool = False) -> DiaryGenerationResult | None:
+    async def generate(self, diary_date: date, provider: Any, force: bool = False, persona_session_id: str = "") -> DiaryGenerationResult | None:
         """Write a daily only while no restore transaction owns the data root."""
         async with self.gate.operation():
-            return await self._generate_unlocked(diary_date, provider, force)
+            return await self._generate_unlocked(diary_date, provider, force, persona_session_id)
 
-    async def _generate_unlocked(self, diary_date: date, provider: Any, force: bool = False) -> DiaryGenerationResult | None:
+    async def _generate_unlocked(self, diary_date: date, provider: Any, force: bool = False, persona_session_id: str = "") -> DiaryGenerationResult | None:
         """Generate while the caller owns ``gate.operation()`` exactly once."""
         date_text = diary_date.isoformat()
         lock = self._locks.setdefault(date_text, asyncio.Lock())
         async with lock:
-            return await self._generate_locked(diary_date, provider, force)
+            return await self._generate_locked(diary_date, provider, force, persona_session_id)
 
-    async def _generate_locked(self, diary_date: date, provider: Any, force: bool) -> DiaryGenerationResult | None:
+    async def _generate_locked(self, diary_date: date, provider: Any, force: bool, persona_session_id: str = "") -> DiaryGenerationResult | None:
         date_text = diary_date.isoformat()
         if not force and self.storage.has_any_diary(date_text):
             changed = migrate_legacy_markdown(self.storage, date_text)
@@ -65,29 +73,35 @@ class DiaryService:
             memories = self.source.read_day(diary_date)
             previous = self.storage.load_metadata(date_text) if force else None
             activity = self.storage.load_daily_activity(date_text)
-            round_count = max(0, int(activity.get("round_count") or 0))
-            entry_type = str(previous.get("entry_type") or "") if previous and previous.get("entry_type") == "low_activity" else classify_entry_type(
-                round_count, len(memories), self.config.low_activity_round_threshold, self.config.sparse_memory_threshold,
-            )
+            activity_round_count = max(0, int(activity.get("round_count") or 0))
+            previous_entry_type = str(previous.get("entry_type") or "") if previous else ""
+            reuse_previous = bool(previous and previous_entry_type in {"normal", "sparse", "low_activity"})
+            if reuse_previous:
+                entry_type = previous_entry_type
+                round_count = max(0, int(previous.get("activity_round_count") or 0))
+            else:
+                entry_type = classify_entry_type(
+                    activity_round_count, len(memories), self.config.low_activity_round_threshold, self.config.sparse_memory_threshold,
+                )
+                round_count = activity_round_count
             events = cluster_memories(memories)
-            conversation_sources: list[dict] = []
+            conversation_sources = self._dict_list(previous.get("conversation_sources")) if reuse_previous else self._dict_list(activity.get("conversation_sources"))
             recent_context_sources: list[dict] = []
             historical_sources: list[dict] = []
-            sessions: list[str] = []
+            sessions = self._strings(previous.get("private_session_ids")) if reuse_previous else (
+                self._strings(activity.get("private_session_ids")) or self.storage.load_private_session_ids()
+            )
+            persona_prompt = await self._resolve_persona_prompt([persona_session_id] if persona_session_id else sessions)
             prompt_version = NORMAL_PROMPT_VERSION
             if entry_type == "normal":
-                system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config)
-            elif entry_type == "low_activity" and previous:
+                system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config, conversation_sources, persona_prompt)
+            elif entry_type in {"sparse", "low_activity"} and reuse_previous:
                 prompt_version = ADAPTIVE_PROMPT_VERSION
-                conversation_sources = self._dict_list(previous.get("conversation_sources"))
                 recent_context_sources = self._dict_list(previous.get("recent_context_sources"))
                 historical_sources = self._dict_list(previous.get("historical_memory_sources"))
-                sessions = self._strings(previous.get("private_session_ids"))
-                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
             else:
                 prompt_version = ADAPTIVE_PROMPT_VERSION
-                conversation_sources = self._dict_list(activity.get("conversation_sources"))
-                sessions = self._strings(activity.get("private_session_ids")) or self.storage.load_private_session_ids()
                 recent = self._read_range(diary_date - timedelta(days=self.config.recent_context_days), diary_date - timedelta(days=1), set(sessions))
                 recent_context_sources = [self._snapshot(item) for item in recent]
                 if entry_type == "low_activity":
@@ -96,15 +110,10 @@ class DiaryService:
                         minimum=self.config.historical_memory_min_count, maximum=self.config.historical_memory_max_count, cooldown_days=self.config.reflection_cooldown_days,
                     )
                     historical_sources = [self._snapshot(item) for item in historical]
-                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
-            response = await self._call_provider(provider, system, prompt, state)
-            parsed = parse_diary_response(
-                response,
-                date_text,
-                {item.memory_id for item in memories},
-                {str(item.get("memory_id") or "") for item in historical_sources},
-                {str(item.get("memory_id") or "") for item in recent_context_sources},
-                prompt_version,
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
+            parsed = await self._call_and_parse(
+                provider, system, prompt, state, date_text, {item.memory_id for item in memories},
+                historical_sources, recent_context_sources, prompt_version, entry_type,
             )
             self._ensure_source_evidence(parsed.metadata, events)
             parsed.metadata.provider = self.config.generation_provider_id
@@ -138,42 +147,66 @@ class DiaryService:
             self.storage.save_generation_state(state)
             return None
 
-    async def preview(self, diary_date: date, provider: Any) -> str | None:
+    async def preview(self, diary_date: date, provider: Any, persona_session_id: str = "") -> str | None:
         """Generate an unsaved draft; never changes diary, state, continuity or sync."""
         try:
             memories = self.source.read_day(diary_date)
             if not memories: return None
             events = cluster_memories(memories)
-            system, prompt = build_messages(diary_date.isoformat(), events, self.storage.load_continuity(), self.config)
-            response = await self._call_provider_preview(provider, system, prompt)
-            return parse_diary_response(response, diary_date.isoformat(), {item.memory_id for item in memories}).markdown
+            sessions = [persona_session_id] if persona_session_id else self.storage.load_private_session_ids()
+            persona_prompt = await self._resolve_persona_prompt(sessions)
+            system, prompt = build_messages(diary_date.isoformat(), events, self.storage.load_continuity(), self.config, astrbot_persona_prompt=persona_prompt)
+            parsed = await self._call_and_parse(
+                provider, system, prompt, None, diary_date.isoformat(), {item.memory_id for item in memories}, [], [], NORMAL_PROMPT_VERSION, "normal",
+            )
+            return parsed.markdown
         except Exception:
             return None
 
-    async def _call_provider_preview(self, provider: Any, system: str, prompt: str) -> str:
-        response = await asyncio.wait_for(provider.text_chat(prompt=prompt, system_prompt=system, contexts=[]), timeout=PROVIDER_TIMEOUT_SECONDS)
-        text = getattr(response, "completion_text", "")
-        if not str(text).strip(): raise ValueError("provider returned an empty diary")
-        return str(text)
-
-    async def _call_provider(self, provider: Any, system: str, prompt: str, state: GenerationState) -> str:
+    async def _call_and_parse(
+        self,
+        provider: Any,
+        system: str,
+        prompt: str,
+        state: GenerationState | None,
+        date_text: str,
+        allowed_memory_ids: set[str],
+        historical_sources: list[dict],
+        recent_sources: list[dict],
+        prompt_version: str,
+        entry_type: str,
+    ) -> ParsedDiary:
+        """Retry the complete provider contract, including JSON parsing and mode validation."""
         last_error: Exception | None = None
         for attempt in range(self.config.provider_retry_count + 1):
-            state.stage = "generating"
-            state.retry_count = attempt
-            state.updated_at = self._now()
-            self.storage.save_generation_state(state)
+            if state is not None:
+                state.stage = "generating"
+                state.retry_count = attempt
+                state.updated_at = self._now()
+                self.storage.save_generation_state(state)
             try:
                 response = await asyncio.wait_for(provider.text_chat(prompt=prompt, system_prompt=system, contexts=[]), timeout=PROVIDER_TIMEOUT_SECONDS)
                 text = getattr(response, "completion_text", "")
                 if not str(text).strip():
                     raise ValueError("provider returned an empty diary")
-                return str(text)
+                parsed = parse_diary_response(
+                    str(text), date_text, allowed_memory_ids,
+                    {str(item.get("memory_id") or "") for item in historical_sources},
+                    {str(item.get("memory_id") or "") for item in recent_sources},
+                    prompt_version,
+                )
+                self._validate_mode_contract(entry_type, parsed, recent_sources, historical_sources)
+                return parsed
             except Exception as exc:
                 last_error = exc
                 if attempt < self.config.provider_retry_count:
                     await asyncio.sleep(0.1 * (2**attempt))
         raise RuntimeError(str(last_error) if last_error else "provider failed")
+
+    async def _resolve_persona_prompt(self, session_ids: list[str]) -> str:
+        if self.persona_resolver is None:
+            return ""
+        return str(await self.persona_resolver(self._strings(session_ids)) or "").strip()
 
     @staticmethod
     def _provider_name(provider: Any) -> str:
@@ -200,6 +233,17 @@ class DiaryService:
             current = usage.get(memory_id, {})
             usage[memory_id] = {"last_reflected_at": now, "reflection_count": max(0, int(current.get("reflection_count") or 0)) + 1}
         self.storage.save_reflection_usage(usage)
+
+    @staticmethod
+    def _validate_mode_contract(entry_type: str, parsed: Any, recent_sources: list[dict], historical_sources: list[dict]) -> None:
+        """Reject adaptive output that does not declare the contract's minimum context use."""
+        recent_candidates = {str(item.get("memory_id") or "") for item in recent_sources} - {""}
+        historical_candidates = {str(item.get("memory_id") or "") for item in historical_sources} - {""}
+        if entry_type == "sparse" and recent_candidates and not parsed.used_recent_memory_ids:
+            raise ValueError("sparse diary did not use required recent context")
+        if entry_type == "low_activity" and (recent_candidates or historical_candidates):
+            if not parsed.used_recent_memory_ids and not parsed.used_historical_memory_ids:
+                raise ValueError("low-activity diary did not use required context")
 
     @staticmethod
     def _ensure_source_evidence(metadata: DiaryMetadata, source_events: list[DiaryEvent]) -> None:

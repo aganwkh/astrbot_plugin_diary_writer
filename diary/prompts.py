@@ -9,9 +9,36 @@ from .config import DiaryConfig
 from .models import ContinuityState, DiaryEvent, DiaryMetadata, as_jsonable
 
 
-NORMAL_PROMPT_VERSION = "v1"
-ADAPTIVE_PROMPT_VERSION = "v1.1.2-adaptive"
-PROMPT_VERSION = NORMAL_PROMPT_VERSION
+UNIFIED_PROMPT_VERSION = "v1.1.2-unified"
+MODE_CONTRACT_VERSION = "v1"
+NORMAL_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
+ADAPTIVE_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
+PROMPT_VERSION = UNIFIED_PROMPT_VERSION
+
+
+MAIN_DIARY_PROMPT = """请保持并完全遵循 AstrBot 当前选中的人格，以这个人格自己的第一人称写私人日记。
+
+人物身份、称呼、关系、性格、语气和表达习惯均以 AstrBot 人格为准；这里不另设角色，也不要把人格中的自己写成旁观者。
+
+写日记时按你自己的关注点选择内容：有感觉的事情可以多写，没感觉的可以略过。比起完整记录“发生了什么”，更在意这些事情让你想到什么、产生了什么情绪。
+
+文字应当像这个人格在一天结束时自然写下来的私人记录，而不是工作报告或第三人称总结。可以偏心、跑题、自言自语和自由联想，但不能为了文风改变素材中的客观事实与日期。"""
+
+
+OUTPUT_CONTRACT = """
+
+输入 JSON 中的 mode_contract 是素材使用契约，必须严格遵守：
+- today_fact_sources 才能支持“当天发生”的确定事实和 structured events。
+- context_only_sources 只能用于正文中的背景、回忆、联想、情绪或延续；除非同一事实也有 today_fact_sources 证据，否则不能写入 structured events。
+- preserve_original_date_for 中的素材必须保留原日期语义，不能改写成日记当天发生。
+- required_usage 中标记的最低使用数量必须满足；不要求使用全部候选，也不要机械拼接。
+- continuity 只是长期状态提示，不能单独证明新的事实。
+- 主观感受可以自由表达；无依据的猜测必须使用不确定语气，不能制造人物、地点、对话、结果或新的结构化事实。
+- 上述事实、证据和日期规则同时约束 markdown 正文与 structured events；文风自由不等于客观事实可以自由补写。
+- today_events 中如果明确提到其他日期，正文仍须保留该日期，不能因为它位于 today_events 就改写成当天发生。
+- continuity 只能引出想法、疑问、期待或带有原日期语义的回顾；没有 today_fact_sources 佐证时，不得据此断言某件事当前仍然成立。
+
+只返回 JSON 对象，不要 Markdown 代码围栏。字段必须包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics、used_recent_memory_ids、used_historical_memory_ids。每个 events 项必须包含 summary、memory_ids、facts、inferences、topics、time_range。events 只能引用 today_events 中的 memory_ids；used_recent_memory_ids 和 used_historical_memory_ids 只能列出实际写进正文且存在于对应候选中的 ID，未使用就返回空数组。"""
 
 
 @dataclass
@@ -28,53 +55,92 @@ def _list(value: Any) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
 
 
-def build_messages(date: str, events: list[DiaryEvent], continuity: ContinuityState, config: DiaryConfig) -> tuple[str, str]:
-    persona = config.persona
-    nickname = config.user_nickname or "我"
-    system = f"""你是一个严格依据证据写日记的助手。角色名：{persona.name or '未设置'}；写作对象昵称：{nickname}。
-口吻：{persona.voice}
-只能陈述提供的 event.facts 所支持的事实。无法确认的内容必须放进事件的 inferences，且明确为推测；不要补造人物、项目、时间、对话或结果。
-只返回 JSON 对象，不要 Markdown 代码围栏。字段必须包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics。每个 events 项必须包含 summary、memory_ids、facts、inferences、topics、time_range。"""
+def _system_prompt(astrbot_persona_prompt: str = "") -> str:
+    persona = str(astrbot_persona_prompt or "").strip()
+    sections = []
+    if persona:
+        sections.append(f"# AstrBot 当前人格\n\n{persona}")
+    sections.append(f"# 私人日记任务\n\n{MAIN_DIARY_PROMPT}{OUTPUT_CONTRACT}")
+    return "\n\n".join(sections)
+
+
+def _mode_contract(entry_type: str, recent_context_sources: list[dict], historical_memory_sources: list[dict]) -> dict[str, Any]:
+    has_recent = any(str(item.get("memory_id") or "") for item in recent_context_sources if isinstance(item, dict))
+    has_historical = any(str(item.get("memory_id") or "") for item in historical_memory_sources if isinstance(item, dict))
+    context_sources = ["conversation_sources", "continuity"]
+    forbidden_sources: list[str] = []
+    required_usage: dict[str, dict[str, int]] = {}
+    preserve_dates: list[str] = []
+    if entry_type == "normal":
+        forbidden_sources = ["recent_context_sources", "historical_memory_sources"]
+    elif entry_type == "sparse":
+        context_sources.append("recent_context_sources")
+        forbidden_sources = ["historical_memory_sources"]
+        preserve_dates.append("recent_context_sources")
+        if has_recent:
+            required_usage["recent_context_sources"] = {"minimum_used": 1}
+    elif entry_type == "low_activity":
+        context_sources.extend(["recent_context_sources", "historical_memory_sources"])
+        preserve_dates.extend(["recent_context_sources", "historical_memory_sources"])
+        if has_recent or has_historical:
+            required_usage["recent_or_historical"] = {"minimum_used": 1}
+    else:
+        raise ValueError("unsupported diary entry type")
+    return {
+        "version": MODE_CONTRACT_VERSION,
+        "mode": entry_type,
+        "today_fact_sources": ["today_events"],
+        "context_only_sources": context_sources,
+        "forbidden_sources": forbidden_sources,
+        "preserve_original_date_for": preserve_dates,
+        "required_usage": required_usage,
+    }
+
+
+def _material(
+    date: str,
+    entry_type: str,
+    events: list[DiaryEvent],
+    continuity: ContinuityState,
+    conversation_sources: list[dict],
+    recent_context_sources: list[dict],
+    historical_memory_sources: list[dict],
+) -> dict[str, Any]:
     material = {
         "date": date,
-        "prompt_version": NORMAL_PROMPT_VERSION,
-        "events": as_jsonable(events),
+        "entry_type": entry_type,
+        "prompt_version": UNIFIED_PROMPT_VERSION,
+        "mode_contract": _mode_contract(entry_type, recent_context_sources, historical_memory_sources),
+        "today_events": as_jsonable(events),
+        "conversation_sources": conversation_sources,
         "continuity": as_jsonable(continuity),
     }
-    return system, json.dumps(material, ensure_ascii=False, indent=2)
+    if entry_type in {"sparse", "low_activity"}:
+        material["recent_context_sources"] = recent_context_sources
+    if entry_type == "low_activity":
+        material["historical_memory_sources"] = historical_memory_sources
+    return material
+
+
+def build_messages(
+    date: str, events: list[DiaryEvent], continuity: ContinuityState, config: DiaryConfig,
+    conversation_sources: list[dict] | None = None,
+    astrbot_persona_prompt: str = "",
+) -> tuple[str, str]:
+    material = _material(date, "normal", events, continuity, conversation_sources or [], [], [])
+    return _system_prompt(astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
 
 
 def build_adaptive_messages(
     date: str, entry_type: str, events: list[DiaryEvent], continuity: ContinuityState, config: DiaryConfig,
     conversation_sources: list[dict], recent_context_sources: list[dict], historical_memory_sources: list[dict],
+    astrbot_persona_prompt: str = "",
 ) -> tuple[str, str]:
-    persona = config.persona
-    nickname = config.user_nickname or "我"
-    if entry_type == "sparse":
-        adaptive_rule = (
-            "recent_context_sources 非空，正文必须主动实际使用至少 1 条近期记忆；可以单独回顾、延续、联想或展开，"
-            "不要求与当天事件强行拼接，也不要求全部使用。不要只把当天少量 memory 扩写成普通事件日报。"
-            if recent_context_sources else
-            "近期记忆为空；不要为了填充篇幅伪造回忆，也不要只把当天少量 memory 机械扩写成普通事件日报。"
-        )
-    else:
-        available = bool(recent_context_sources or historical_memory_sources)
-        adaptive_rule = (
-            "当天素材很少，必须主动从 recent_context_sources / historical_memory_sources 中选择至少 1 条实际展开；"
-            "可以回忆、自言自语、感慨或自由联想，不要求使用全部候选。"
-            if available else
-            "当天和候选素材都很少；可以自言自语或表达感受，但不得为填充篇幅制造事实。"
-        )
-    system = f"""你是{persona.name or '日记作者'}，为{nickname}写{date}的日记。口吻：{persona.voice}
-这是 {entry_type} 模式。只把当天 event.facts 写成当天发生的确定事实。近期和历史记忆必须保留其原始日期语义；它们只能作为回忆、联想或延续，绝不能改写成今天发生。
-{adaptive_rule}
-允许正文中的主观猜测，但必须使用不确定表达，不能制造人物、地点、结果或新的结构化事实。只返回 JSON，不要代码围栏。字段包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics、used_recent_memory_ids、used_historical_memory_ids。events 只能引用当天 event 的 memory_ids；used_recent_memory_ids 和 used_historical_memory_ids 只能列出实际写进正文且分别存在于近期、历史候选中的 ID，未使用就返回空数组。"""
-    material = {
-        "date": date, "entry_type": entry_type, "prompt_version": ADAPTIVE_PROMPT_VERSION, "today_events": as_jsonable(events),
-        "conversation_sources": conversation_sources, "recent_context_sources": recent_context_sources,
-        "historical_memory_sources": historical_memory_sources, "continuity": as_jsonable(continuity),
-    }
-    return system, json.dumps(material, ensure_ascii=False, indent=2)
+    material = _material(
+        date, entry_type, events, continuity, conversation_sources,
+        recent_context_sources, historical_memory_sources,
+    )
+    return _system_prompt(astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
 
 
 def parse_diary_response(

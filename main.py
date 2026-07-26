@@ -72,11 +72,19 @@ class DiaryWriterPlugin(Star):
         root = data_root / "plugin_data" / "astrbot_plugin_diary_writer"
         self.legacy_diary_root = data_root / "plugin_data" / "diary_writer" / "diaries"
         self.storage = DiaryStorage(root)
-        self.service = DiaryService(self.config, self.storage, SQLiteLivingMemorySource(self.config.livingmemory_path(Path(get_astrbot_data_path()))))
+        self.service = DiaryService(
+            self.config,
+            self.storage,
+            SQLiteLivingMemorySource(self.config.livingmemory_path(Path(get_astrbot_data_path()))),
+            persona_resolver=self._astrbot_persona_prompt,
+        )
         self.reviews = ReviewService(self.storage, self.config)
         self.corrections = CorrectionService(self.storage, self.reviews)
         self.activity_tracker = DailyActivityTracker(self.storage, saved_rounds=2)
-        self.web_api = DiaryWebApi(context, self.config, self.storage, self.service, self.reviews, self._after_daily_unlocked)
+        self.web_api = DiaryWebApi(
+            context, self.config, self.storage, self.service, self.reviews,
+            self._after_daily_unlocked, self._astrbot_persona_prompt,
+        )
         self.web_api.register()
         self._reminder_lock = asyncio.Lock()
 
@@ -147,6 +155,37 @@ class DiaryWriterPlugin(Star):
         if event is not None:
             return self.context.get_using_provider(umo=event.unified_msg_origin)
         return None
+
+    async def _astrbot_persona_prompt(self, session_ids: list[str]) -> str:
+        """Resolve AstrBot's effective persona without copying or overriding it in plugin config."""
+        manager = getattr(self.context, "persona_manager", None)
+        conversation_manager = getattr(self.context, "conversation_manager", None)
+        if manager is None or conversation_manager is None:
+            return ""
+        for umo in reversed(list(dict.fromkeys(str(item) for item in session_ids if str(item)))):
+            conversation_id = await conversation_manager.get_curr_conversation_id(umo)
+            conversation = await conversation_manager.get_conversation(umo, conversation_id) if conversation_id else None
+            config = self.context.get_config(umo=umo)
+            provider_settings = config.get("provider_settings", {})
+            conversation_persona_id = getattr(conversation, "persona_id", None)
+            persona_id, persona, forced_persona_id, use_webchat_default = await manager.resolve_selected_persona(
+                umo=umo,
+                conversation_persona_id=conversation_persona_id,
+                platform_name=umo.split(":", 1)[0],
+                provider_settings=provider_settings,
+            )
+            if persona_id == "[%None]" or use_webchat_default:
+                return ""
+            if persona and str(persona.get("prompt") or "").strip():
+                return str(persona["prompt"]).strip()
+            if not forced_persona_id and conversation_persona_id is None:
+                default_persona = await manager.get_default_persona_v3(umo)
+                if default_persona and str(default_persona.get("prompt") or "").strip():
+                    return str(default_persona["prompt"]).strip()
+            if persona_id:
+                return ""
+        default_persona = await manager.get_default_persona_v3()
+        return str(default_persona.get("prompt") or "").strip() if default_persona else ""
 
     async def _cron(self):
         if not should_run_regular_check(datetime.now(), self.config.cron_start_delay_minutes):
@@ -254,7 +293,10 @@ class DiaryWriterPlugin(Star):
         except ValueError: yield event.plain_result("请使用 YYYY-MM-DD 日期"); return
         provider = await self._provider(event)
         async with GLOBAL_MAINTENANCE_GATE.operation():
-            result = await self.service._generate_unlocked(target, provider, force=force)
+            result = await self.service._generate_unlocked(
+                target, provider, force=force,
+                persona_session_id=str(getattr(event, "unified_msg_origin", "") or ""),
+            )
             if diary_changed(result):
                 await self._after_daily_unlocked(target, provider, "daily_rewritten" if force else "daily_added")
         yield event.plain_result("日记已保存（重写已备份旧版本）。" if result else "生成失败；请查看 generation_state.json。")
@@ -272,7 +314,10 @@ class DiaryWriterPlugin(Star):
         if not self._private(event):
             if is_authorized(event, self.config): yield event.plain_result(private_only_reminder())
             return
-        draft = await self.service.preview(datetime.now().date(), await self._provider(event))
+        draft = await self.service.preview(
+            datetime.now().date(), await self._provider(event),
+            persona_session_id=str(getattr(event, "unified_msg_origin", "") or ""),
+        )
         yield event.plain_result(draft[:3000] if draft else "预览生成失败；未写入任何日记文件。")
 
     async def _review_write(self, event, kind, period, force):
