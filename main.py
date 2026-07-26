@@ -212,9 +212,6 @@ class DiaryWriterPlugin(Star):
             self.storage.save_daily_finalization_state(state)
             return
         provider = await self._provider()
-        if provider is None:
-            self.storage.save_generation_state(GenerationState(pending_date=yesterday.isoformat(), stage="failed", last_error="generation provider unavailable", updated_at=now.astimezone().isoformat()))
-            return
         async with GLOBAL_MAINTENANCE_GATE.operation():
             target = effective
             while target <= yesterday:
@@ -222,6 +219,12 @@ class DiaryWriterPlugin(Star):
                     if migrate_legacy_markdown(self.storage, target.isoformat()):
                         self.reviews.mark_daily_changed(target, "legacy_metadata_migrated")
                 else:
+                    if provider is None:
+                        self.storage.save_generation_state(GenerationState(
+                            pending_date=target.isoformat(), stage="failed",
+                            last_error="generation provider unavailable", updated_at=now.astimezone().isoformat(),
+                        ))
+                        return
                     result = await self.service._generate_unlocked(target, provider)
                     if not result:
                         break
@@ -229,7 +232,8 @@ class DiaryWriterPlugin(Star):
                 target += timedelta(days=1)
             state.update({"effective_date": effective.isoformat(), "last_finalization_at": now.astimezone().isoformat(), "last_checked_through": yesterday.isoformat()})
             self.storage.save_daily_finalization_state(state)
-            await self._catch_up_reviews_unlocked(provider)
+            if provider is not None:
+                await self._catch_up_reviews_unlocked(provider)
 
     async def _automatic(self, inactive_minutes):
         now = datetime.now(); raw = self.storage.load_activity()

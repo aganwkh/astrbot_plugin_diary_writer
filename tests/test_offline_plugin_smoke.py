@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from diary.models import SourceMemory
+from diary.models import GenerationState, SourceMemory
 
 
 class Source:
@@ -240,6 +240,21 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             await plugin._daily_finalization()
             self.assertFalse(plugin.storage.has_any_diary((datetime.now() - timedelta(days=1)).date().isoformat()))
             self.assertEqual(plugin.storage.load_generation_state().stage, "idle")
+
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            yesterday = (datetime.now() - timedelta(days=1)).date()
+            plugin.storage.write_diary_data(yesterday.isoformat(), "# existing\n", {"date": yesterday.isoformat()})
+            plugin.storage.save_daily_finalization_state({"effective_date": yesterday.isoformat()})
+            original = GenerationState(stage="idle", last_success_at="kept", updated_at="kept")
+            plugin.storage.save_generation_state(original)
+
+            async def no_provider(_event=None): return None
+            plugin._provider = no_provider
+            await plugin._daily_finalization()
+            state = plugin.storage.load_generation_state()
+            self.assertEqual((state.stage, state.last_success_at, state.updated_at), ("idle", "kept", "kept"))
 
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))
