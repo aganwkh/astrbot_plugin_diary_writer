@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.2 (unreleased)
+
+- 强化 sparse / low_activity adaptive prompt，要求在候选存在时实际使用可追溯的近期或历史素材。
+- 新增 `recent_memory_used_ids`，并把模型报告的近期 memory ID 严格限制在实际候选内。
+- 分别记录 normal 与 adaptive 的真实 prompt version。
+- 当模型漏报当天 structured events 时，用确定性的当天 source clusters 补齐真实 LivingMemory evidence。
+
 ## 1.1.1
 
 - 修复 AstrBot cron 接收带时区活动时间时的 datetime 运算异常。

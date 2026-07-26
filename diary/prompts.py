@@ -9,13 +9,16 @@ from .config import DiaryConfig
 from .models import ContinuityState, DiaryEvent, DiaryMetadata, as_jsonable
 
 
-PROMPT_VERSION = "v1"
+NORMAL_PROMPT_VERSION = "v1"
+ADAPTIVE_PROMPT_VERSION = "v1.1.2-adaptive"
+PROMPT_VERSION = NORMAL_PROMPT_VERSION
 
 
 @dataclass
 class ParsedDiary:
     markdown: str
     metadata: DiaryMetadata
+    used_recent_memory_ids: list[str]
     used_historical_memory_ids: list[str]
 
 
@@ -34,7 +37,7 @@ def build_messages(date: str, events: list[DiaryEvent], continuity: ContinuitySt
 只返回 JSON 对象，不要 Markdown 代码围栏。字段必须包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics。每个 events 项必须包含 summary、memory_ids、facts、inferences、topics、time_range。"""
     material = {
         "date": date,
-        "prompt_version": PROMPT_VERSION,
+        "prompt_version": NORMAL_PROMPT_VERSION,
         "events": as_jsonable(events),
         "continuity": as_jsonable(continuity),
     }
@@ -47,18 +50,41 @@ def build_adaptive_messages(
 ) -> tuple[str, str]:
     persona = config.persona
     nickname = config.user_nickname or "我"
+    if entry_type == "sparse":
+        adaptive_rule = (
+            "recent_context_sources 非空，正文必须主动实际使用至少 1 条近期记忆；可以单独回顾、延续、联想或展开，"
+            "不要求与当天事件强行拼接，也不要求全部使用。不要只把当天少量 memory 扩写成普通事件日报。"
+            if recent_context_sources else
+            "近期记忆为空；不要为了填充篇幅伪造回忆，也不要只把当天少量 memory 机械扩写成普通事件日报。"
+        )
+    else:
+        available = bool(recent_context_sources or historical_memory_sources)
+        adaptive_rule = (
+            "当天素材很少，必须主动从 recent_context_sources / historical_memory_sources 中选择至少 1 条实际展开；"
+            "可以回忆、自言自语、感慨或自由联想，不要求使用全部候选。"
+            if available else
+            "当天和候选素材都很少；可以自言自语或表达感受，但不得为填充篇幅制造事实。"
+        )
     system = f"""你是{persona.name or '日记作者'}，为{nickname}写{date}的日记。口吻：{persona.voice}
 这是 {entry_type} 模式。只把当天 event.facts 写成当天发生的确定事实。近期和历史记忆必须保留其原始日期语义；它们只能作为回忆、联想或延续，绝不能改写成今天发生。
-允许正文中的主观猜测，但必须使用不确定表达，不能制造人物、地点、结果或新的结构化事实。只返回 JSON，不要代码围栏。字段包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics、used_historical_memory_ids。events 只能引用当天 event 的 memory_ids；used_historical_memory_ids 只能列出实际写进正文的历史候选 ID。"""
+{adaptive_rule}
+允许正文中的主观猜测，但必须使用不确定表达，不能制造人物、地点、结果或新的结构化事实。只返回 JSON，不要代码围栏。字段包含 markdown、title、mood、mood_score、topics、tags、people、projects、events、highlights、unresolved、ongoing_topics、used_recent_memory_ids、used_historical_memory_ids。events 只能引用当天 event 的 memory_ids；used_recent_memory_ids 和 used_historical_memory_ids 只能列出实际写进正文且分别存在于近期、历史候选中的 ID，未使用就返回空数组。"""
     material = {
-        "date": date, "entry_type": entry_type, "prompt_version": "v1.1", "today_events": as_jsonable(events),
+        "date": date, "entry_type": entry_type, "prompt_version": ADAPTIVE_PROMPT_VERSION, "today_events": as_jsonable(events),
         "conversation_sources": conversation_sources, "recent_context_sources": recent_context_sources,
         "historical_memory_sources": historical_memory_sources, "continuity": as_jsonable(continuity),
     }
     return system, json.dumps(material, ensure_ascii=False, indent=2)
 
 
-def parse_diary_response(raw: str, date: str, allowed_memory_ids: set[str], historical_candidate_ids: set[str] | None = None) -> ParsedDiary:
+def parse_diary_response(
+    raw: str,
+    date: str,
+    allowed_memory_ids: set[str],
+    historical_candidate_ids: set[str] | None = None,
+    recent_candidate_ids: set[str] | None = None,
+    prompt_version: str = NORMAL_PROMPT_VERSION,
+) -> ParsedDiary:
     text = raw.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -101,7 +127,13 @@ def parse_diary_response(raw: str, date: str, allowed_memory_ids: set[str], hist
         projects=_list(data.get("projects")), events=events, highlights=_list(data.get("highlights")),
         unresolved=_list(data.get("unresolved")), ongoing_topics=_list(data.get("ongoing_topics")),
         memory_ids=used_ids, source_count=len(allowed_memory_ids),
-        generated_at=datetime.now(timezone.utc).isoformat(), prompt_version=PROMPT_VERSION,
+        generated_at=datetime.now(timezone.utc).isoformat(), prompt_version=prompt_version,
     )
+    recent = [memory_id for memory_id in _list(data.get("used_recent_memory_ids")) if memory_id in (recent_candidate_ids or set())]
     historical = [memory_id for memory_id in _list(data.get("used_historical_memory_ids")) if memory_id in (historical_candidate_ids or set())]
-    return ParsedDiary(data["markdown"].strip() + "\n", metadata, list(dict.fromkeys(historical)))
+    return ParsedDiary(
+        data["markdown"].strip() + "\n",
+        metadata,
+        list(dict.fromkeys(recent)),
+        list(dict.fromkeys(historical)),
+    )

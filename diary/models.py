@@ -54,6 +54,7 @@ class DiaryMetadata:
     activity_round_count: int = 0
     conversation_sources: list[dict[str, str]] = field(default_factory=list)
     recent_context_sources: list[dict[str, Any]] = field(default_factory=list)
+    recent_memory_used_ids: list[str] = field(default_factory=list)
     historical_memory_candidate_ids: list[str] = field(default_factory=list)
     historical_memory_used_ids: list[str] = field(default_factory=list)
     historical_memory_sources: list[dict[str, Any]] = field(default_factory=list)

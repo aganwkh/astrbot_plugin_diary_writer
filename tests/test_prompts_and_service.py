@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from diary.config import DiaryConfig
-from diary.models import DiaryEvent, SourceMemory
+from diary.models import ContinuityState, DiaryEvent, SourceMemory
 from diary.storage import DiaryStorage
 
 
@@ -18,6 +18,42 @@ def load_module(name):
 
 
 class PromptTests(unittest.TestCase):
+    def test_sparse_prompt_requires_using_available_recent_context(self):
+        prompts = load_module("diary.prompts")
+        system, material = prompts.build_adaptive_messages(
+            "2026-07-25",
+            "sparse",
+            [],
+            ContinuityState(),
+            DiaryConfig(),
+            [],
+            [{"memory_id": "recent-1", "occurred_at": "2026-07-23T10:00:00+08:00", "text": "近期记忆"}],
+            [],
+        )
+        self.assertIn("必须主动实际使用至少 1 条近期记忆", system)
+        self.assertIn("不要求与当天事件强行拼接", system)
+        self.assertIn("不要只把当天少量 memory 扩写成普通事件日报", system)
+        self.assertIn("绝不能改写成今天发生", system)
+        self.assertIn("used_recent_memory_ids", system)
+        self.assertEqual(json.loads(material)["prompt_version"], prompts.ADAPTIVE_PROMPT_VERSION)
+
+    def test_low_activity_prompt_encourages_available_context_without_forcing_all_candidates(self):
+        prompts = load_module("diary.prompts")
+        system, _ = prompts.build_adaptive_messages(
+            "2026-07-25",
+            "low_activity",
+            [],
+            ContinuityState(),
+            DiaryConfig(),
+            [],
+            [{"memory_id": "recent-1"}],
+            [{"memory_id": "historical-1"}],
+        )
+        self.assertIn("必须主动从 recent_context_sources / historical_memory_sources 中选择至少 1 条实际展开", system)
+        self.assertIn("回忆、自言自语、感慨或自由联想", system)
+        self.assertIn("不要求使用全部候选", system)
+        self.assertIn("必须使用不确定表达", system)
+
     def test_parser_removes_unknown_evidence_and_keeps_inference_separate(self):
         prompts = load_module("diary.prompts")
         raw = json.dumps({
@@ -35,6 +71,35 @@ class PromptTests(unittest.TestCase):
         raw = json.dumps({"markdown": "# Diary\n\n回忆。", "title": "Diary", "events": [], "used_historical_memory_ids": ["candidate", "fabricated"]})
         parsed = prompts.parse_diary_response(raw, "2026-07-25", set(), {"candidate"})
         self.assertEqual(parsed.used_historical_memory_ids, ["candidate"])
+
+    def test_parser_accepts_only_used_recent_candidates_and_never_invents_usage(self):
+        prompts = load_module("diary.prompts")
+        raw = json.dumps({
+            "markdown": "# Diary\n\n想起了前天的事。",
+            "title": "Diary",
+            "events": [],
+            "used_recent_memory_ids": ["recent-1", "fabricated", "recent-1"],
+        })
+        parsed = prompts.parse_diary_response(
+            raw,
+            "2026-07-25",
+            set(),
+            set(),
+            {"recent-1"},
+            prompts.ADAPTIVE_PROMPT_VERSION,
+        )
+        self.assertEqual(parsed.used_recent_memory_ids, ["recent-1"])
+        self.assertEqual(parsed.metadata.prompt_version, prompts.ADAPTIVE_PROMPT_VERSION)
+
+        unused = prompts.parse_diary_response(
+            json.dumps({"markdown": "# Diary\n\n没有使用近期记忆。", "title": "Diary", "events": []}),
+            "2026-07-25",
+            set(),
+            set(),
+            {"recent-1"},
+            prompts.ADAPTIVE_PROMPT_VERSION,
+        )
+        self.assertEqual(unused.used_recent_memory_ids, [])
 
 
 class FakeSource:

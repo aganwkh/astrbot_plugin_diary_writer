@@ -11,9 +11,9 @@ from .activity import classify_entry_type, select_historical_memories
 from .events import cluster_memories
 from .migration import migrate_legacy_markdown
 from .memory_source import MemorySource
-from .models import GenerationState, SourceMemory
+from .models import DiaryEvent, DiaryMetadata, GenerationState, SourceMemory
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
-from .prompts import build_adaptive_messages, build_messages, parse_diary_response
+from .prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION, build_adaptive_messages, build_messages, parse_diary_response
 from .storage import DiaryStorage
 from .website_sync import WebsiteSync
 
@@ -74,15 +74,18 @@ class DiaryService:
             recent_context_sources: list[dict] = []
             historical_sources: list[dict] = []
             sessions: list[str] = []
+            prompt_version = NORMAL_PROMPT_VERSION
             if entry_type == "normal":
                 system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config)
             elif entry_type == "low_activity" and previous:
+                prompt_version = ADAPTIVE_PROMPT_VERSION
                 conversation_sources = self._dict_list(previous.get("conversation_sources"))
                 recent_context_sources = self._dict_list(previous.get("recent_context_sources"))
                 historical_sources = self._dict_list(previous.get("historical_memory_sources"))
                 sessions = self._strings(previous.get("private_session_ids"))
                 system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
             else:
+                prompt_version = ADAPTIVE_PROMPT_VERSION
                 conversation_sources = self._dict_list(activity.get("conversation_sources"))
                 sessions = self._strings(activity.get("private_session_ids")) or self.storage.load_private_session_ids()
                 recent = self._read_range(diary_date - timedelta(days=self.config.recent_context_days), diary_date - timedelta(days=1), set(sessions))
@@ -95,13 +98,22 @@ class DiaryService:
                     historical_sources = [self._snapshot(item) for item in historical]
                 system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources)
             response = await self._call_provider(provider, system, prompt, state)
-            parsed = parse_diary_response(response, date_text, {item.memory_id for item in memories}, {str(item.get("memory_id") or "") for item in historical_sources})
+            parsed = parse_diary_response(
+                response,
+                date_text,
+                {item.memory_id for item in memories},
+                {str(item.get("memory_id") or "") for item in historical_sources},
+                {str(item.get("memory_id") or "") for item in recent_context_sources},
+                prompt_version,
+            )
+            self._ensure_source_evidence(parsed.metadata, events)
             parsed.metadata.provider = self.config.generation_provider_id
             parsed.metadata.model = self._provider_name(provider)
             parsed.metadata.entry_type = entry_type
             parsed.metadata.activity_round_count = round_count
             parsed.metadata.conversation_sources = conversation_sources
             parsed.metadata.recent_context_sources = recent_context_sources
+            parsed.metadata.recent_memory_used_ids = parsed.used_recent_memory_ids
             parsed.metadata.historical_memory_sources = historical_sources
             parsed.metadata.historical_memory_candidate_ids = [str(item.get("memory_id") or "") for item in historical_sources]
             parsed.metadata.historical_memory_used_ids = parsed.used_historical_memory_ids
@@ -188,6 +200,33 @@ class DiaryService:
             current = usage.get(memory_id, {})
             usage[memory_id] = {"last_reflected_at": now, "reflection_count": max(0, int(current.get("reflection_count") or 0)) + 1}
         self.storage.save_reflection_usage(usage)
+
+    @staticmethod
+    def _ensure_source_evidence(metadata: DiaryMetadata, source_events: list[DiaryEvent]) -> None:
+        """Fill only missing same-day evidence from deterministic source clusters."""
+        covered = {memory_id for event in metadata.events for memory_id in event.memory_ids}
+        for source in source_events:
+            missing = [memory_id for memory_id in source.memory_ids if memory_id not in covered]
+            if not missing:
+                continue
+            overlapping = next((event for event in metadata.events if set(event.memory_ids) & set(source.memory_ids)), None)
+            if overlapping is not None:
+                overlapping.memory_ids = list(dict.fromkeys(overlapping.memory_ids + missing))
+                overlapping.facts = list(dict.fromkeys(overlapping.facts + source.facts))
+                overlapping.topics = list(dict.fromkeys(overlapping.topics + source.topics))
+                overlapping.time_range = list(dict.fromkeys(overlapping.time_range + source.time_range))[:2]
+            else:
+                metadata.events.append(DiaryEvent(
+                    summary=source.summary,
+                    memory_ids=missing,
+                    kind=source.kind,
+                    facts=list(source.facts),
+                    inferences=list(source.inferences),
+                    topics=list(source.topics),
+                    time_range=list(source.time_range),
+                ))
+            covered.update(missing)
+        metadata.memory_ids = list(dict.fromkeys(memory_id for event in metadata.events for memory_id in event.memory_ids))
 
     @staticmethod
     def _snapshot(memory: SourceMemory) -> dict[str, Any]:

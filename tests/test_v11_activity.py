@@ -6,6 +6,7 @@ from pathlib import Path
 
 from diary.config import DiaryConfig
 from diary.models import SourceMemory
+from diary.prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION
 from diary.service import DiaryService
 from diary.storage import DiaryStorage
 
@@ -116,27 +117,30 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sparse_uses_recent_private_context_without_random_history_and_normal_keeps_normal_prompt_path(self):
         class Source:
-            def __init__(self, day): self.day = day; self.before_calls = 0; self.range_calls = 0
+            def __init__(self, day, recent=None): self.day = day; self.recent = recent or []; self.before_calls = 0; self.range_calls = 0
             def read_day(self, _day, limit=80): return self.day
-            def read_range(self, *_args, **_kwargs): self.range_calls += 1; return []
+            def read_range(self, *_args, **_kwargs): self.range_calls += 1; return self.recent
             def read_before(self, *_args, **_kwargs): self.before_calls += 1; return []
 
         class Provider:
             def __init__(self): self.prompts = []
             async def text_chat(self, prompt, **_kwargs):
                 self.prompts.append(prompt)
-                return type("Response", (), {"completion_text": json.dumps({"markdown": "# d\n", "title": "d", "events": []})})()
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# d\n", "title": "d", "events": [], "used_recent_memory_ids": ["recent"]})})()
 
         with tempfile.TemporaryDirectory() as temporary:
             storage = DiaryStorage(Path(temporary))
             storage.save_daily_activity("2026-07-25", {"date": "2026-07-25", "round_count": 3, "conversation_sources": [], "private_session_ids": ["qq:FriendMessage:owner"]})
-            sparse_source = Source([])
+            sparse_source = Source([], [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期事实", session_id="qq:FriendMessage:owner")])
             sparse_provider = Provider()
             self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, sparse_source).generate(date(2026, 7, 25), sparse_provider))
             self.assertEqual(storage.load_metadata("2026-07-25")["entry_type"], "sparse")
             self.assertEqual(sparse_source.before_calls, 0)
             self.assertEqual(sparse_source.range_calls, 1)
             self.assertIn('"entry_type": "sparse"', sparse_provider.prompts[0])
+            sparse_metadata = storage.load_metadata("2026-07-25")
+            self.assertEqual(sparse_metadata["recent_memory_used_ids"], ["recent"])
+            self.assertEqual(sparse_metadata["prompt_version"], ADAPTIVE_PROMPT_VERSION)
 
         with tempfile.TemporaryDirectory() as temporary:
             storage = DiaryStorage(Path(temporary))
@@ -149,6 +153,90 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(normal_source.before_calls, 0)
             self.assertEqual(normal_source.range_calls, 0)
             self.assertNotIn('"entry_type": "normal"', normal_provider.prompts[0])
+            self.assertEqual(storage.load_metadata("2026-07-25")["prompt_version"], NORMAL_PROMPT_VERSION)
+
+    async def test_empty_provider_events_still_preserve_all_same_day_source_evidence(self):
+        class Source:
+            def read_day(self, _day, limit=80):
+                return [
+                    SourceMemory("today-1", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "完成第一件事", topics=("工作",)),
+                    SourceMemory("today-2", datetime(2026, 7, 25, 18, tzinfo=timezone.utc), "完成第二件事", topics=("生活",)),
+                ]
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# d\n", "title": "d", "events": []})})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, Source()).generate(date(2026, 7, 25), Provider()))
+            metadata = storage.load_metadata("2026-07-25")
+            self.assertEqual(set(metadata["memory_ids"]), {"today-1", "today-2"})
+            self.assertEqual({memory_id for event in metadata["events"] for memory_id in event["memory_ids"]}, {"today-1", "today-2"})
+            self.assertTrue(all(event["facts"] for event in metadata["events"]))
+
+    async def test_partial_provider_evidence_is_completed_without_duplicate_event(self):
+        class Source:
+            def read_day(self, _day, limit=80):
+                return [
+                    SourceMemory("today-1", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "同一项目的第一步", topics=("项目",)),
+                    SourceMemory("today-2", datetime(2026, 7, 25, 10, tzinfo=timezone.utc), "同一项目的第二步", topics=("项目",)),
+                ]
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# d\n", "title": "d",
+                    "events": [{"summary": "项目进展", "memory_ids": ["today-1"], "facts": ["同一项目的第一步"]}],
+                })})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, Source()).generate(date(2026, 7, 25), Provider()))
+            metadata = storage.load_metadata("2026-07-25")
+            self.assertEqual(len(metadata["events"]), 1)
+            self.assertEqual(metadata["events"][0]["memory_ids"], ["today-1", "today-2"])
+            self.assertEqual(set(metadata["memory_ids"]), {"today-1", "today-2"})
+
+    async def test_recent_and_historical_sources_never_become_same_day_events(self):
+        class Source:
+            def read_day(self, _day, limit=80):
+                return [SourceMemory("today", datetime(2026, 7, 25, 9, tzinfo=timezone.utc), "今天的事实", session_id="qq:FriendMessage:owner")]
+            def read_range(self, *_args, **_kwargs):
+                return [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期回忆", session_id="qq:FriendMessage:owner")]
+            def read_before(self, *_args, **_kwargs):
+                return [SourceMemory("historical", datetime(2026, 6, 1, 9, tzinfo=timezone.utc), "历史回忆", session_id="qq:FriendMessage:owner")]
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# d\n", "title": "d",
+                    "events": [{"summary": "非法混入", "memory_ids": ["recent", "historical"], "facts": ["回忆"]}],
+                    "used_recent_memory_ids": ["recent", "fake"],
+                    "used_historical_memory_ids": ["historical", "fake"],
+                })})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            storage.save_daily_activity("2026-07-25", {"round_count": 1, "private_session_ids": ["qq:FriendMessage:owner"]})
+            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, Source()).generate(date(2026, 7, 25), Provider()))
+            metadata = storage.load_metadata("2026-07-25")
+            event_ids = {memory_id for event in metadata["events"] for memory_id in event["memory_ids"]}
+            self.assertEqual(event_ids, {"today"})
+            self.assertEqual(metadata["recent_memory_used_ids"], ["recent"])
+            self.assertEqual(metadata["historical_memory_used_ids"], ["historical"])
+
+    async def test_v111_metadata_without_recent_usage_field_remains_readable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            storage.metadata_path("2026-07-25").parent.mkdir(parents=True)
+            storage.metadata_path("2026-07-25").write_text(json.dumps({
+                "date": "2026-07-25", "title": "v1.1.1", "prompt_version": "v1.1",
+                "events": [], "recent_context_sources": [{"memory_id": "recent"}],
+            }), encoding="utf-8")
+            metadata = storage.load_metadata("2026-07-25")
+            self.assertEqual(metadata["title"], "v1.1.1")
+            self.assertNotIn("recent_memory_used_ids", metadata)
 
     async def test_archive_round_trips_v11_activity_and_reflection_state(self):
         from diary.archives import ArchiveService
