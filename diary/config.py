@@ -20,6 +20,7 @@ class DiaryConfig:
     auto_write_enabled: bool = True
     livingmemory_db_path: str = ""
     generation_provider_id: str = ""
+    diary_main_prompt: str = ""
     website_sync_enabled: bool = False
     website_sync_path: str = ""
     provider_retry_count: int = 2
@@ -43,6 +44,7 @@ class DiaryConfig:
             auto_write_enabled=bool(raw.get("auto_write_enabled", True)),
             livingmemory_db_path=str(raw.get("livingmemory_db_path", "") or "").strip(),
             generation_provider_id=str(raw.get("generation_provider_id", "") or "").strip(),
+            diary_main_prompt=str(raw.get("diary_main_prompt", "") or "").strip(),
             website_sync_enabled=bool(raw.get("website_sync_enabled", False)),
             website_sync_path=str(raw.get("website_sync_path", "") or "").strip(),
             provider_retry_count=max(0, min(5, int(raw.get("provider_retry_count", 2) or 0))),

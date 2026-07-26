@@ -9,23 +9,16 @@ from .config import DiaryConfig
 from .models import ContinuityState, DiaryEvent, DiaryMetadata, as_jsonable
 
 
-UNIFIED_PROMPT_VERSION = "v1.1.2-unified"
+UNIFIED_PROMPT_VERSION = "v1.1.2-configurable"
 MODE_CONTRACT_VERSION = "v1"
 NORMAL_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
 ADAPTIVE_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
 PROMPT_VERSION = UNIFIED_PROMPT_VERSION
 
 
-MAIN_DIARY_PROMPT = """请保持并完全遵循 AstrBot 当前选中的人格，以这个人格自己的第一人称写私人日记。
-
-人物身份、称呼、关系、性格、语气和表达习惯均以 AstrBot 人格为准；这里不另设角色，也不要把人格中的自己写成旁观者。
-
-写日记时按你自己的关注点选择内容：有感觉的事情可以多写，没感觉的可以略过。比起完整记录“发生了什么”，更在意这些事情让你想到什么、产生了什么情绪。
-
-文字应当像这个人格在一天结束时自然写下来的私人记录，而不是工作报告或第三人称总结。可以偏心、跑题、自言自语和自由联想，但不能为了文风改变素材中的客观事实与日期。"""
-
-
 OUTPUT_CONTRACT = """
+
+请根据输入 JSON 中的素材写该日期的私人日记。
 
 输入 JSON 中的 mode_contract 是素材使用契约，必须严格遵守：
 - today_fact_sources 才能支持“当天发生”的确定事实和 structured events。
@@ -55,12 +48,15 @@ def _list(value: Any) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
 
 
-def _system_prompt(astrbot_persona_prompt: str = "") -> str:
+def _system_prompt(config: DiaryConfig, astrbot_persona_prompt: str = "") -> str:
     persona = str(astrbot_persona_prompt or "").strip()
     sections = []
     if persona:
         sections.append(f"# AstrBot 当前人格\n\n{persona}")
-    sections.append(f"# 私人日记任务\n\n{MAIN_DIARY_PROMPT}{OUTPUT_CONTRACT}")
+    main_prompt = str(config.diary_main_prompt or "").strip()
+    if main_prompt:
+        sections.append(f"# 用户配置的日记主提示词\n\n{main_prompt}")
+    sections.append(f"# 日记素材与输出契约\n{OUTPUT_CONTRACT}")
     return "\n\n".join(sections)
 
 
@@ -128,7 +124,7 @@ def build_messages(
     astrbot_persona_prompt: str = "",
 ) -> tuple[str, str]:
     material = _material(date, "normal", events, continuity, conversation_sources or [], [], [])
-    return _system_prompt(astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
+    return _system_prompt(config, astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
 
 
 def build_adaptive_messages(
@@ -140,7 +136,7 @@ def build_adaptive_messages(
         date, entry_type, events, continuity, conversation_sources,
         recent_context_sources, historical_memory_sources,
     )
-    return _system_prompt(astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
+    return _system_prompt(config, astrbot_persona_prompt), json.dumps(material, ensure_ascii=False, indent=2)
 
 
 def parse_diary_response(

@@ -56,7 +56,7 @@ v1.0 数据保存在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_d
 
 - `owner_ids` 默认为空，必须显式配置授权用户。
 - `generation_provider_id` 用于自动生成；留空时仅能使用触发私聊的模型。
-- 日记作者直接继承当前私聊会话选中的 AstrBot 人格；插件不维护独立的角色预设、角色名或口吻覆盖。
+- 日记作者直接继承当前私聊会话选中的 AstrBot 人格；可在 `diary_main_prompt` 中自由编辑日记主提示词，插件仅自动附加素材、日期、证据和输出契约。
 - 网站同步默认关闭；只有同时设置 `website_sync_enabled` 和 `website_sync_path` 才会写入目标目录，失败不会影响本地日记。
 - `livingmemory_db_path` 可覆盖默认的 LivingMemory SQLite 路径。
 

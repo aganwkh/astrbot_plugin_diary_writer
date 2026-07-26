@@ -37,7 +37,7 @@ _STATE_FILES = (
     "private_session_ids.json", "reflection_usage.json", "daily_finalization_state.json",
 )
 _SAFE_SETTINGS = (
-    "auto_write_enabled", "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes",
+    "diary_main_prompt", "auto_write_enabled", "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes",
     "on_this_day_reminder_enabled", "low_activity_round_threshold", "sparse_memory_threshold",
     "recent_context_days", "historical_memory_min_count", "historical_memory_max_count", "reflection_cooldown_days",
 )

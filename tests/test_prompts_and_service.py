@@ -20,7 +20,8 @@ def load_module(name):
 class PromptTests(unittest.TestCase):
     def test_all_modes_share_the_configured_main_prompt(self):
         prompts = load_module("diary.prompts")
-        config = DiaryConfig()
+        configured_prompt = "这是用户自己填写的唯一日记主提示词。"
+        config = DiaryConfig.from_mapping({"diary_main_prompt": configured_prompt})
         persona = "你是 AstrBot 当前选择的人格；保持自己的姓名和说话方式。"
         normal_system, _ = prompts.build_messages("2026-07-25", [], ContinuityState(), config, [], persona)
         sparse_system, _ = prompts.build_adaptive_messages(
@@ -40,10 +41,22 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(normal_system, sparse_system)
         self.assertEqual(sparse_system, low_system)
         self.assertIn(persona, normal_system)
-        self.assertIn("AstrBot 当前选中的人格", normal_system)
+        self.assertIn(configured_prompt, normal_system)
+        self.assertNotIn("文字应当像一天结束时自然写下的私人记录", normal_system)
         self.assertNotIn("千早爱音", normal_system)
         self.assertNotIn("虾仁", normal_system)
         self.assertIn("mode_contract 是素材使用契约", normal_system)
+
+    def test_blank_main_prompt_keeps_only_persona_and_safety_contract(self):
+        prompts = load_module("diary.prompts")
+        system, _ = prompts.build_messages(
+            "2026-07-25", [], ContinuityState(),
+            DiaryConfig.from_mapping({"diary_main_prompt": ""}),
+            astrbot_persona_prompt="ASTRBOT PERSONA",
+        )
+        self.assertIn("ASTRBOT PERSONA", system)
+        self.assertNotIn("用户配置的日记主提示词", system)
+        self.assertIn("日记素材与输出契约", system)
 
     def test_markdown_is_bound_by_the_same_fact_and_date_rules(self):
         prompts = load_module("diary.prompts")

@@ -41,6 +41,12 @@ class ConfigAndPermissionTests(unittest.TestCase):
         self.assertFalse(hasattr(settings, "persona_preset"))
         self.assertFalse(hasattr(settings, "user_nickname"))
 
+    def test_diary_main_prompt_is_user_configurable(self):
+        config = load_module("diary.config")
+        settings = config.DiaryConfig.from_mapping({"diary_main_prompt": "我的自定义主提示词"})
+        self.assertEqual(settings.diary_main_prompt, "我的自定义主提示词")
+        self.assertEqual(config.DiaryConfig().diary_main_prompt, "")
+
     def test_disabled_auto_write_is_effective(self):
         config = load_module("diary.config")
         settings = config.DiaryConfig.from_mapping({"owner_ids": ["1"], "auto_write_enabled": False})
