@@ -90,11 +90,11 @@ Plugin Page 已在真实 AstrBot Dashboard 验证身份中间件、bridge 加载
 - 插件首次启动会原子保存 v1.1 生效日期。启动和 04:10 都只补该日期至昨天的缺口，绝不自动追溯 v1.1 之前的空档；补写历史日期时只读取目标日期之前的 LivingMemory，避免时间穿越。
 - daily 有三种 `entry_type`：`normal`（私聊轮数超过阈值且当天 memory 至少 3 条）、`sparse`（私聊轮数超过阈值但当天 memory 不超过 2 条）、`low_activity`（默认不超过 2 轮私聊）。三者都进入周/月/年回顾。
 - `daily_activity/YYYY-MM-DD.json` 只追踪授权私聊的有效入站消息。前两轮保存用户原文与时间；第三轮起仅增加计数。AstrBot 4.26.7 没有可靠的“最终机器人回复”监听钩子，因此不会猜测或伪造 assistant 回复。生成成功后 activity 文件删除；失败时保留以便重试。
-- sparse/low_activity 使用目标日前 3 天、同一私聊会话的真实 LivingMemory 作为辅助。low_activity 还会从同一私聊会话的历史 memory 中抽 1–3 条，按时间层级、importance 和 30 天软冷却加权；只有模型明确报告实际写入正文的候选 memory 才会进入冷却。
+- sparse/low_activity 使用目标日前 3 天、同一私聊会话的真实 LivingMemory 作为辅助。low_activity 还会从同一私聊会话的历史 memory 中随机抽 3–5 条，按时间层级、importance 和 30 天软冷却加权；只有模型明确报告实际写入正文的候选 memory 才会进入冷却。
 - low_activity 首次生成会把聊天来源、近期来源、随机候选及实际使用 IDs 写入 metadata。`/重写日记` 复用这些已保存来源，不重新随机。
 - 管理页时间线会显示 `entry_type`；low_activity 额外显示当天轮数、聊天素材数和随机回忆来源数，不直接暴露内容。
 
-新增配置：`low_activity_round_threshold`（默认 2）、`sparse_memory_threshold`（默认 2）、`recent_context_days`（默认 3）、`historical_memory_min_count` / `historical_memory_max_count`（默认 1/3）、`reflection_cooldown_days`（默认 30）。权重实现保持内置，避免配置膨胀。
+新增配置：`low_activity_round_threshold`（默认 2）、`sparse_memory_threshold`（默认 2）、`recent_context_days`（默认 3）、`historical_memory_min_count` / `historical_memory_max_count`（默认 3/5）、`reflection_cooldown_days`（默认 30）。权重实现保持内置，避免配置膨胀。
 
 ## 事实纠错、长期归档与完整性
 

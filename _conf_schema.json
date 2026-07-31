@@ -83,12 +83,12 @@
   "historical_memory_min_count": {
     "description": "低活跃随机历史记忆最少条数",
     "type": "int",
-    "default": 1
+    "default": 3
   },
   "historical_memory_max_count": {
     "description": "低活跃随机历史记忆最多条数",
     "type": "int",
-    "default": 3
+    "default": 5
   },
   "reflection_cooldown_days": {
     "description": "随机历史记忆回忆冷却天数",

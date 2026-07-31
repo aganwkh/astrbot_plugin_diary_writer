@@ -72,6 +72,39 @@ class MemorySourceTests(unittest.TestCase):
             self.assertEqual([item.memory_id for item in source.read_range(date(2026, 7, 22), date(2026, 7, 24), sessions)], ["recent"])
             self.assertEqual([item.memory_id for item in source.read_before(date(2026, 7, 25), sessions)], ["old", "recent"])
 
+    def test_reuses_parsed_snapshot_until_database_changes(self):
+        source_module = load_source()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "livingmemory.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("CREATE TABLE documents (id TEXT, text TEXT, metadata TEXT)")
+                connection.execute("INSERT INTO documents VALUES (?, ?, ?)", ("one", "one", json.dumps({"create_time": 1784937600})))
+                connection.commit()
+            finally:
+                connection.close()
+            source, calls = source_module.SQLiteLivingMemorySource(database), []
+            original_connect = source_module.sqlite3.connect
+            def counted_connect(*args, **kwargs):
+                calls.append(1)
+                return original_connect(*args, **kwargs)
+            source_module.sqlite3.connect = counted_connect
+            try:
+                source.read_day(date(2026, 7, 25))
+                source.read_range(date(2026, 7, 24), date(2026, 7, 25), {"private"})
+                source.read_before(date(2026, 7, 26), {"private"})
+            finally:
+                source_module.sqlite3.connect = original_connect
+            self.assertEqual(len(calls), 1)
+
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("INSERT INTO documents VALUES (?, ?, ?)", ("two", "two", json.dumps({"create_time": 1784937600})))
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertEqual([item.memory_id for item in source.read_day(date(2026, 7, 25))], ["one", "two"])
+
 
 if __name__ == "__main__":
     unittest.main()

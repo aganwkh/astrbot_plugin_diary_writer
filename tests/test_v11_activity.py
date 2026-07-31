@@ -48,8 +48,8 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(historical_weight(old, target, {}), 0)
         self.assertLess(historical_weight(recent, target, usage), historical_weight(recent, target, {}))
         picked = select_historical_memories([recent, old, high, group], target, usage, {"qq:FriendMessage:owner"})
-        self.assertGreaterEqual(len(picked), 1)
-        self.assertLessEqual(len(picked), 3)
+        self.assertGreaterEqual(len(picked), 3)
+        self.assertLessEqual(len(picked), 5)
         self.assertNotIn("group", {item.memory_id for item in picked})
 
     async def test_low_activity_persists_sources_cools_only_used_memory_and_rewrite_keeps_candidates(self):

@@ -46,6 +46,8 @@ class SQLiteLivingMemorySource:
 
     def __init__(self, database_path: Path):
         self.database_path = database_path
+        self._snapshot_key: tuple[int, int] | None = None
+        self._snapshot: list[SourceMemory] = []
 
     def read_day(self, diary_date: date, limit: int = 80) -> list[SourceMemory]:
         return self._read(lambda item: item.occurred_at.date() == diary_date, limit)
@@ -61,17 +63,42 @@ class SQLiteLivingMemorySource:
         return self._read(lambda item: item.occurred_at.date() < before and item.session_id in session_ids, limit)
 
     def _read(self, include, limit: int) -> list[SourceMemory]:
+        return [item for item in self._records() if include(item)][:max(0, limit)]
+
+    def _records(self) -> list[SourceMemory]:
         if not self.database_path.is_file():
             raise MemorySourceError(f"LivingMemory database not found: {self.database_path}")
+        stat = self.database_path.stat()
+        snapshot_key = (stat.st_mtime_ns, stat.st_size)
+        if snapshot_key == self._snapshot_key:
+            return self._snapshot
         uri = f"{self.database_path.resolve().as_uri()}?mode=ro"
         connection = None
+        records: list[SourceMemory] = []
         try:
             connection = sqlite3.connect(uri, uri=True)
             columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
             required = {"id", "text", "metadata"}
             if not required.issubset(columns):
                 raise MemorySourceError("LivingMemory documents schema is unavailable or incompatible")
-            rows = connection.execute("SELECT id, text, metadata FROM documents").fetchall()
+            for memory_id, text, raw_metadata in connection.execute("SELECT id, text, metadata FROM documents"):
+                try:
+                    metadata = json.loads(raw_metadata or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                timestamp = _timestamp(metadata)
+                if timestamp is None or not str(text or "").strip():
+                    continue
+                occurred_at = datetime.fromtimestamp(timestamp)
+                try:
+                    importance = float(metadata.get("importance") or 0)
+                except (TypeError, ValueError):
+                    importance = 0.0
+                records.append(SourceMemory(
+                    memory_id=str(memory_id), occurred_at=occurred_at, text=str(text).strip(), importance=importance,
+                    session_id=str(metadata.get("session_id") or ""), topics=_text_list(metadata.get("topics")),
+                    key_facts=_text_list(metadata.get("key_facts")),
+                ))
         except MemorySourceError:
             raise
         except sqlite3.Error as exc:
@@ -80,30 +107,6 @@ class SQLiteLivingMemorySource:
             if connection is not None:
                 connection.close()
 
-        records: list[SourceMemory] = []
-        for memory_id, text, raw_metadata in rows:
-            try:
-                metadata = json.loads(raw_metadata or "{}")
-            except (TypeError, json.JSONDecodeError):
-                continue
-            timestamp = _timestamp(metadata)
-            if timestamp is None or not str(text or "").strip():
-                continue
-            occurred_at = datetime.fromtimestamp(timestamp)
-            try:
-                importance = float(metadata.get("importance") or 0)
-            except (TypeError, ValueError):
-                importance = 0.0
-            record = SourceMemory(
-                    memory_id=str(memory_id),
-                    occurred_at=occurred_at,
-                    text=str(text).strip(),
-                    importance=importance,
-                    session_id=str(metadata.get("session_id") or ""),
-                    topics=_text_list(metadata.get("topics")),
-                    key_facts=_text_list(metadata.get("key_facts")),
-                )
-            if include(record):
-                records.append(record)
         records.sort(key=lambda item: (item.occurred_at, -item.importance, item.memory_id))
-        return records[:max(0, limit)]
+        self._snapshot_key, self._snapshot = snapshot_key, records
+        return records

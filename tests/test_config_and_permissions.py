@@ -52,6 +52,13 @@ class ConfigAndPermissionTests(unittest.TestCase):
         settings = config.DiaryConfig.from_mapping({"owner_ids": ["1"], "auto_write_enabled": False})
         self.assertFalse(settings.auto_write_enabled)
 
+    def test_historical_memory_count_allows_up_to_five(self):
+        config = load_module("diary.config")
+        settings = config.DiaryConfig.from_mapping({"historical_memory_min_count": 3, "historical_memory_max_count": 5})
+        self.assertEqual((settings.historical_memory_min_count, settings.historical_memory_max_count), (3, 5))
+        capped = config.DiaryConfig.from_mapping({"historical_memory_max_count": 9})
+        self.assertEqual(capped.historical_memory_max_count, 5)
+
 
 if __name__ == "__main__":
     unittest.main()

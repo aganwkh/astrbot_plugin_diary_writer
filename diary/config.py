@@ -31,8 +31,8 @@ class DiaryConfig:
     low_activity_round_threshold: int = 2
     sparse_memory_threshold: int = 2
     recent_context_days: int = 3
-    historical_memory_min_count: int = 1
-    historical_memory_max_count: int = 3
+    historical_memory_min_count: int = 3
+    historical_memory_max_count: int = 5
     reflection_cooldown_days: int = 30
 
     @classmethod
@@ -55,8 +55,8 @@ class DiaryConfig:
             low_activity_round_threshold=max(0, min(20, int(raw.get("low_activity_round_threshold", 2) or 0))),
             sparse_memory_threshold=max(0, int(raw.get("sparse_memory_threshold", 2) or 0)),
             recent_context_days=max(1, min(7, int(raw.get("recent_context_days", 3) or 3))),
-            historical_memory_min_count=max(1, min(3, int(raw.get("historical_memory_min_count", 1) or 1))),
-            historical_memory_max_count=max(1, min(3, int(raw.get("historical_memory_max_count", 3) or 3))),
+            historical_memory_min_count=max(1, min(5, int(raw.get("historical_memory_min_count", 3) or 3))),
+            historical_memory_max_count=max(1, min(5, int(raw.get("historical_memory_max_count", 5) or 5))),
             reflection_cooldown_days=max(1, min(365, int(raw.get("reflection_cooldown_days", 30) or 30))),
         )
 

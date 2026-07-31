@@ -30,7 +30,7 @@ def historical_weight(memory: SourceMemory, target_date: date, usage: dict[str, 
 
 
 def select_historical_memories(
-    memories: list[SourceMemory], target_date: date, usage: dict[str, dict], private_session_ids: set[str], *, rng=None, minimum: int = 1, maximum: int = 3, cooldown_days: int = 30,
+    memories: list[SourceMemory], target_date: date, usage: dict[str, dict], private_session_ids: set[str], *, rng=None, minimum: int = 3, maximum: int = 5, cooldown_days: int = 30,
 ) -> list[SourceMemory]:
     pool = [item for item in memories if item.occurred_at.date() < target_date and item.session_id in private_session_ids]
     if not pool:
