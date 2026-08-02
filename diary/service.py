@@ -11,7 +11,7 @@ from .activity import classify_entry_type, select_historical_memories
 from .events import cluster_memories
 from .migration import migrate_legacy_markdown
 from .memory_source import MemorySource
-from .models import DiaryEvent, DiaryMetadata, GenerationState, SourceMemory
+from .models import ContinuityState, DiaryEvent, DiaryMetadata, GenerationState, SourceMemory
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION, ParsedDiary, build_adaptive_messages, build_messages, parse_diary_response
 from .storage import DiaryStorage
@@ -75,31 +75,29 @@ class DiaryService:
             activity = self.storage.load_daily_activity(date_text)
             activity_round_count = max(0, int(activity.get("round_count") or 0))
             previous_entry_type = str(previous.get("entry_type") or "") if previous else ""
-            reuse_previous = bool(previous and previous_entry_type in {"normal", "sparse", "low_activity"})
+            reuse_previous = bool(previous and previous_entry_type in {"normal", "low_activity"})
             if reuse_previous:
                 entry_type = previous_entry_type
                 round_count = max(0, int(previous.get("activity_round_count") or 0))
             else:
-                entry_type = classify_entry_type(
-                    activity_round_count, len(memories), self.config.low_activity_round_threshold, self.config.sparse_memory_threshold,
-                )
-                round_count = activity_round_count
+                entry_type = classify_entry_type(len(memories))
+                round_count = max(0, int(previous.get("activity_round_count") or 0)) if previous else activity_round_count
             events = cluster_memories(memories)
-            conversation_sources = self._dict_list(previous.get("conversation_sources")) if reuse_previous else self._dict_list(activity.get("conversation_sources"))
+            conversation_sources = self._dict_list(previous.get("conversation_sources")) if previous else self._dict_list(activity.get("conversation_sources"))
             recent_context_sources: list[dict] = []
             historical_sources: list[dict] = []
-            sessions = self._strings(previous.get("private_session_ids")) if reuse_previous else (
+            sessions = self._strings(previous.get("private_session_ids")) if previous else (
                 self._strings(activity.get("private_session_ids")) or self.storage.load_private_session_ids()
             )
             persona_prompt = await self._resolve_persona_prompt([persona_session_id] if persona_session_id else sessions)
             prompt_version = NORMAL_PROMPT_VERSION
             if entry_type == "normal":
-                system, prompt = build_messages(date_text, events, self.storage.load_continuity(), self.config, conversation_sources, persona_prompt)
-            elif entry_type in {"sparse", "low_activity"} and reuse_previous:
+                system, prompt = build_messages(date_text, events, ContinuityState(), self.config, conversation_sources, persona_prompt)
+            elif entry_type == "low_activity" and reuse_previous:
                 prompt_version = ADAPTIVE_PROMPT_VERSION
                 recent_context_sources = self._dict_list(previous.get("recent_context_sources"))
                 historical_sources = self._dict_list(previous.get("historical_memory_sources"))
-                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, ContinuityState(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
             else:
                 prompt_version = ADAPTIVE_PROMPT_VERSION
                 recent = self._read_range(diary_date - timedelta(days=self.config.recent_context_days), diary_date - timedelta(days=1), set(sessions))
@@ -110,7 +108,7 @@ class DiaryService:
                         minimum=self.config.historical_memory_min_count, maximum=self.config.historical_memory_max_count, cooldown_days=self.config.reflection_cooldown_days,
                     )
                     historical_sources = [self._snapshot(item) for item in historical]
-                system, prompt = build_adaptive_messages(date_text, entry_type, events, self.storage.load_continuity(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
+                system, prompt = build_adaptive_messages(date_text, entry_type, events, ContinuityState(), self.config, conversation_sources, recent_context_sources, historical_sources, persona_prompt)
             parsed = await self._call_and_parse(
                 provider, system, prompt, state, date_text, {item.memory_id for item in memories},
                 historical_sources, recent_context_sources, prompt_version, entry_type,
@@ -155,7 +153,7 @@ class DiaryService:
             events = cluster_memories(memories)
             sessions = [persona_session_id] if persona_session_id else self.storage.load_private_session_ids()
             persona_prompt = await self._resolve_persona_prompt(sessions)
-            system, prompt = build_messages(diary_date.isoformat(), events, self.storage.load_continuity(), self.config, astrbot_persona_prompt=persona_prompt)
+            system, prompt = build_messages(diary_date.isoformat(), events, ContinuityState(), self.config, astrbot_persona_prompt=persona_prompt)
             parsed = await self._call_and_parse(
                 provider, system, prompt, None, diary_date.isoformat(), {item.memory_id for item in memories}, [], [], NORMAL_PROMPT_VERSION, "normal",
             )

@@ -236,6 +236,40 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(storage.load_generation_state().retry_count, 1)
             self.assertTrue(storage.load_generation_state().last_success_at)
 
+    async def test_generation_omits_saved_continuity_from_provider_prompt(self):
+        service_module = load_module("diary.service")
+
+        class Provider:
+            def __init__(self): self.prompt = ""
+            async def text_chat(self, **kwargs):
+                self.prompt = kwargs["prompt"]
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# ok\n", "events": []})})()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = DiaryStorage(Path(temp_dir))
+            storage.save_continuity(ContinuityState(unresolved_items=["old server issue"]))
+            provider = Provider()
+            result = await service_module.DiaryService(DiaryConfig.from_mapping({"provider_retry_count": 0}), storage, FakeSource()).generate(date(2026, 7, 25), provider)
+            self.assertTrue(result)
+            self.assertNotIn("old server issue", provider.prompt)
+
+    async def test_preview_omits_saved_continuity_from_provider_prompt(self):
+        service_module = load_module("diary.service")
+
+        class Provider:
+            def __init__(self): self.prompt = ""
+            async def text_chat(self, **kwargs):
+                self.prompt = kwargs["prompt"]
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# ok\n", "events": []})})()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            storage = DiaryStorage(Path(temp_dir))
+            storage.save_continuity(ContinuityState(unresolved_items=["old server issue"]))
+            provider = Provider()
+            result = await service_module.DiaryService(DiaryConfig(), storage, FakeSource()).preview(date(2026, 7, 25), provider)
+            self.assertTrue(result)
+            self.assertNotIn("old server issue", provider.prompt)
+
     async def test_failed_generation_records_recovery_information(self):
         service_module = load_module("diary.service")
 

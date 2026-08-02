@@ -63,18 +63,6 @@
     "default": false,
     "hint": "默认关闭；仅授权用户的普通私聊首次触发，群聊和命令不会提示。"
   },
-  "low_activity_round_threshold": {
-    "description": "低活跃私聊轮数阈值",
-    "type": "int",
-    "default": 2,
-    "hint": "当天授权私聊有效入站轮数不超过此值时使用 low_activity。"
-  },
-  "sparse_memory_threshold": {
-    "description": "稀疏日记记忆阈值",
-    "type": "int",
-    "default": 2,
-    "hint": "私聊轮数超过低活跃阈值后，当天 LivingMemory 不超过此值时使用 sparse。"
-  },
   "recent_context_days": {
     "description": "近期私聊上下文天数",
     "type": "int",

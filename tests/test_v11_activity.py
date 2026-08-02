@@ -28,15 +28,13 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item["user_text"] for item in saved["conversation_sources"]], ["第一句", "第二句"])
             self.assertEqual(saved["private_session_ids"], ["qq:FriendMessage:owner"])
 
-    async def test_entry_modes_and_historical_weights_keep_private_memories_and_cooldown_is_soft(self):
+    async def test_entry_type_uses_livingmemory_count_only(self):
         from diary.activity import classify_entry_type, historical_weight, select_historical_memories
 
         target = date(2026, 7, 25)
-        self.assertEqual(classify_entry_type(0, 99), "low_activity")
-        self.assertEqual(classify_entry_type(2, 99), "low_activity")
-        self.assertEqual(classify_entry_type(3, 0), "sparse")
-        self.assertEqual(classify_entry_type(3, 2), "sparse")
-        self.assertEqual(classify_entry_type(3, 3), "normal")
+        self.assertEqual(classify_entry_type(0), "low_activity")
+        self.assertEqual(classify_entry_type(4), "low_activity")
+        self.assertEqual(classify_entry_type(5), "normal")
 
         recent = SourceMemory("recent", datetime(2026, 7, 20, tzinfo=timezone.utc), "近期私聊", importance=1, session_id="qq:FriendMessage:owner")
         old = SourceMemory("old", datetime(2025, 1, 1, tzinfo=timezone.utc), "旧私聊", importance=1, session_id="qq:FriendMessage:owner")
@@ -122,37 +120,39 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(await service.generate(date(2026, 7, 25), BrokenProvider()))
             self.assertTrue(storage.daily_activity_path("2026-07-25").exists())
 
-    async def test_sparse_uses_recent_private_context_without_random_history_and_normal_keeps_normal_prompt_path(self):
+    async def test_low_activity_uses_history_when_livingmemory_is_sparse_and_normal_keeps_normal_prompt_path(self):
         class Source:
-            def __init__(self, day, recent=None): self.day = day; self.recent = recent or []; self.before_calls = 0; self.range_calls = 0
+            def __init__(self, day, recent=None, history=None): self.day = day; self.recent = recent or []; self.history = history or []; self.before_calls = 0; self.range_calls = 0
             def read_day(self, _day, limit=80): return self.day
             def read_range(self, *_args, **_kwargs): self.range_calls += 1; return self.recent
-            def read_before(self, *_args, **_kwargs): self.before_calls += 1; return []
+            def read_before(self, *_args, **_kwargs): self.before_calls += 1; return self.history
 
         class Provider:
             def __init__(self): self.prompts = []
             async def text_chat(self, prompt, **_kwargs):
                 self.prompts.append(prompt)
-                return type("Response", (), {"completion_text": json.dumps({"markdown": "# d\n", "title": "d", "events": [], "used_recent_memory_ids": ["recent"]})})()
+                return type("Response", (), {"completion_text": json.dumps({"markdown": "# d\n", "title": "d", "events": [], "used_historical_memory_ids": ["historical-1"]})})()
 
         with tempfile.TemporaryDirectory() as temporary:
             storage = DiaryStorage(Path(temporary))
             storage.save_daily_activity("2026-07-25", {"date": "2026-07-25", "round_count": 3, "conversation_sources": [], "private_session_ids": ["qq:FriendMessage:owner"]})
-            sparse_source = Source([], [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期事实", session_id="qq:FriendMessage:owner")])
-            sparse_provider = Provider()
-            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, sparse_source).generate(date(2026, 7, 25), sparse_provider))
-            self.assertEqual(storage.load_metadata("2026-07-25")["entry_type"], "sparse")
-            self.assertEqual(sparse_source.before_calls, 0)
-            self.assertEqual(sparse_source.range_calls, 1)
-            self.assertIn('"entry_type": "sparse"', sparse_provider.prompts[0])
-            sparse_metadata = storage.load_metadata("2026-07-25")
-            self.assertEqual(sparse_metadata["recent_memory_used_ids"], ["recent"])
-            self.assertEqual(sparse_metadata["prompt_version"], ADAPTIVE_PROMPT_VERSION)
+            history = [SourceMemory(f"historical-{index}", datetime(2026, 7, 20, index + 1, tzinfo=timezone.utc), f"历史事实{index}", session_id="qq:FriendMessage:owner") for index in range(1, 4)]
+            low_source = Source([], history=history)
+            low_provider = Provider()
+            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, low_source).generate(date(2026, 7, 25), low_provider))
+            self.assertEqual(storage.load_metadata("2026-07-25")["entry_type"], "low_activity")
+            self.assertEqual(low_source.before_calls, 1)
+            self.assertEqual(low_source.range_calls, 1)
+            self.assertIn('"entry_type": "low_activity"', low_provider.prompts[0])
+            low_metadata = storage.load_metadata("2026-07-25")
+            self.assertEqual(set(low_metadata["historical_memory_candidate_ids"]), {"historical-1", "historical-2", "historical-3"})
+            self.assertEqual(low_metadata["historical_memory_used_ids"], ["historical-1"])
+            self.assertEqual(low_metadata["prompt_version"], ADAPTIVE_PROMPT_VERSION)
 
         with tempfile.TemporaryDirectory() as temporary:
             storage = DiaryStorage(Path(temporary))
             storage.save_daily_activity("2026-07-25", {"date": "2026-07-25", "round_count": 3, "conversation_sources": [], "private_session_ids": ["qq:FriendMessage:owner"]})
-            memories = [SourceMemory(str(index), datetime(2026, 7, 25, index + 1, tzinfo=timezone.utc), f"事实{index}") for index in range(3)]
+            memories = [SourceMemory(str(index), datetime(2026, 7, 25, index + 1, tzinfo=timezone.utc), f"事实{index}") for index in range(5)]
             normal_source = Source(memories)
             normal_provider = Provider()
             self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, normal_source).generate(date(2026, 7, 25), normal_provider))
@@ -162,7 +162,7 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('"entry_type": "normal"', normal_provider.prompts[0])
             self.assertEqual(storage.load_metadata("2026-07-25")["prompt_version"], NORMAL_PROMPT_VERSION)
 
-    async def test_rewrite_preserves_sparse_contract_without_daily_activity(self):
+    async def test_rewrite_preserves_low_activity_contract_without_daily_activity(self):
         class Source:
             def __init__(self):
                 self.allow_context_reads = True
@@ -172,16 +172,18 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
 
             def read_range(self, *_args, **_kwargs):
                 if not self.allow_context_reads:
-                    raise AssertionError("sparse rewrite must reuse frozen recent sources")
-                return [SourceMemory("recent", datetime(2026, 7, 23, 9, tzinfo=timezone.utc), "近期事实", session_id="qq:FriendMessage:owner")]
+                    raise AssertionError("low activity rewrite must reuse frozen sources")
+                return []
 
             def read_before(self, *_args, **_kwargs):
-                raise AssertionError("sparse mode must not select historical memories")
+                if not self.allow_context_reads:
+                    raise AssertionError("low activity rewrite must reuse frozen sources")
+                return [SourceMemory(f"historical-{index}", datetime(2026, 7, 20, index, tzinfo=timezone.utc), f"历史事实{index}", session_id="qq:FriendMessage:owner") for index in range(1, 4)]
 
         class Provider:
             async def text_chat(self, **_kwargs):
                 return type("Response", (), {"completion_text": json.dumps({
-                    "markdown": "# sparse\n", "title": "sparse", "events": [], "used_recent_memory_ids": ["recent"],
+                    "markdown": "# low\n", "title": "low", "events": [], "used_historical_memory_ids": ["historical-1"],
                 })})()
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -195,23 +197,53 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             service = DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, source)
             self.assertTrue(await service.generate(date(2026, 7, 25), Provider()))
             original = storage.load_metadata("2026-07-25")
-            self.assertEqual(original["entry_type"], "sparse")
+            self.assertEqual(original["entry_type"], "low_activity")
             self.assertEqual(original["activity_round_count"], 8)
             self.assertFalse(storage.daily_activity_path("2026-07-25").exists())
 
             source.allow_context_reads = False
             self.assertTrue(await service.generate(date(2026, 7, 25), Provider(), force=True))
             rewritten = storage.load_metadata("2026-07-25")
-            self.assertEqual(rewritten["entry_type"], "sparse")
+            self.assertEqual(rewritten["entry_type"], "low_activity")
             self.assertEqual(rewritten["activity_round_count"], 8)
             self.assertEqual(rewritten["conversation_sources"], original["conversation_sources"])
-            self.assertEqual(rewritten["recent_context_sources"], original["recent_context_sources"])
+            self.assertEqual(rewritten["historical_memory_sources"], original["historical_memory_sources"])
             self.assertEqual(rewritten["private_session_ids"], original["private_session_ids"])
+
+    async def test_rewrite_migrates_legacy_sparse_to_low_activity_and_keeps_chat_sources(self):
+        class Source:
+            def __init__(self): self.before_calls = 0
+            def read_day(self, _day, limit=80): return []
+            def read_range(self, *_args, **_kwargs): return []
+            def read_before(self, *_args, **_kwargs):
+                self.before_calls += 1
+                return [SourceMemory(f"historical-{index}", datetime(2026, 7, 20, index, tzinfo=timezone.utc), f"历史事实{index}", session_id="qq:FriendMessage:owner") for index in range(1, 4)]
+
+        class Provider:
+            async def text_chat(self, **_kwargs):
+                return type("Response", (), {"completion_text": json.dumps({
+                    "markdown": "# low\n", "title": "low", "events": [], "used_historical_memory_ids": ["historical-1"],
+                })})()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = DiaryStorage(Path(temporary))
+            chat_sources = [{"timestamp": "2026-07-25T09:00:00+00:00", "user_text": "当天的原始聊天"}]
+            storage.write_diary_data("2026-07-25", "# sparse\n", {
+                "date": "2026-07-25", "title": "sparse", "entry_type": "sparse", "activity_round_count": 3,
+                "conversation_sources": chat_sources, "private_session_ids": ["qq:FriendMessage:owner"], "events": [],
+            })
+            source = Source()
+            self.assertTrue(await DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, source).generate(date(2026, 7, 25), Provider(), force=True))
+            rewritten = storage.load_metadata("2026-07-25")
+            self.assertEqual(rewritten["entry_type"], "low_activity")
+            self.assertEqual(rewritten["conversation_sources"], chat_sources)
+            self.assertEqual(set(rewritten["historical_memory_candidate_ids"]), {"historical-1", "historical-2", "historical-3"})
+            self.assertEqual(source.before_calls, 1)
 
     async def test_rewrite_preserves_normal_contract_without_daily_activity(self):
         class Source:
             def read_day(self, _day, limit=80):
-                return [SourceMemory(str(index), datetime(2026, 7, 25, index + 1, tzinfo=timezone.utc), f"事实{index}") for index in range(3)]
+                return [SourceMemory(str(index), datetime(2026, 7, 25, index + 1, tzinfo=timezone.utc), f"事实{index}") for index in range(5)]
 
             def read_range(self, *_args, **_kwargs):
                 raise AssertionError("normal rewrite must not enter adaptive context collection")

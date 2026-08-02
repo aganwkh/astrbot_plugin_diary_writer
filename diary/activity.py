@@ -9,10 +9,8 @@ from .models import SourceMemory
 from .storage import DiaryStorage
 
 
-def classify_entry_type(round_count: int, memory_count: int, round_threshold: int = 2, sparse_memory_threshold: int = 2) -> str:
-    if max(0, int(round_count)) <= round_threshold:
-        return "low_activity"
-    return "sparse" if max(0, int(memory_count)) <= sparse_memory_threshold else "normal"
+def classify_entry_type(memory_count: int) -> str:
+    return "low_activity" if max(0, int(memory_count)) <= 4 else "normal"
 
 
 def historical_weight(memory: SourceMemory, target_date: date, usage: dict[str, dict], cooldown_days: int = 30) -> float:

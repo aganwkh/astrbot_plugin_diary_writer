@@ -131,7 +131,7 @@ class DiaryWebApi:
         self.archives = ArchiveService(storage, {
             key: getattr(config, key) for key in (
                 "diary_main_prompt", "auto_write_enabled", "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
-                "low_activity_round_threshold", "sparse_memory_threshold", "recent_context_days",
+                "recent_context_days",
                 "historical_memory_min_count", "historical_memory_max_count", "reflection_cooldown_days",
             ) if hasattr(config, key)
         })
