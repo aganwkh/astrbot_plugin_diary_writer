@@ -36,17 +36,11 @@
     "default": "请保持并完全遵循 AstrBot 当前选中的人格，以这个人格自己的第一人称写私人日记。\n\n人物身份、称呼、关系、性格、语气和表达习惯均以 AstrBot 人格为准；不要把人格中的自己写成旁观者。\n\n按自己的关注点选择内容：有感觉的事情可以多写，没感觉的可以略过。比起完整记录发生了什么，更在意这些事情让自己想到什么、产生了什么情绪。\n\n文字应当像一天结束时自然写下的私人记录，而不是工作报告或第三人称总结。可以偏心、跑题、自言自语和自由联想，但不能为了文风改变素材中的客观事实与日期。",
     "hint": "可自由修改日记文风与关注方式；角色身份和关系建议写在 AstrBot 人格中。Normal / Sparse / Low Activity 的素材范围由插件自动附加。"
   },
-  "website_sync_enabled": {
-    "description": "启用网站镜像同步",
-    "type": "bool",
-    "default": false,
-    "hint": "默认关闭；同步失败不会影响本地日记。"
-  },
-  "website_sync_path": {
-    "description": "网站日记目录",
-    "type": "string",
-    "default": "",
-    "hint": "启用同步时必须显式填写；插件只写入该目录。"
+  "public_site_port": {
+    "description": "公开日记站端口",
+    "type": "int",
+    "default": 8788,
+    "hint": "完全公开、无需登录，只提供日记阅读；请在服务器防火墙和安全组放行此 TCP 端口。"
   },
   "provider_retry_count": {
     "description": "生成失败重试次数",

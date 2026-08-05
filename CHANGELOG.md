@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.1.2 (unreleased)
+## 1.1.3 (unreleased)
+
+- 日记、metadata、备份和运行状态迁入插件目录的 `data/diary_writer/`；首次启动会非破坏性复制旧 `plugin_data/astrbot_plugin_diary_writer/`。
+- 删除外部网站镜像同步，新增内置、无登录、只读的移动端公开日记站，默认端口为 `8788`。
+- 保留 AstrBot Dashboard 的日记管理页；公开站不暴露来源证据、修订、搜索或写入接口。
+
+## 1.1.2
 
 - 强化 sparse / low_activity adaptive prompt，要求在候选存在时实际使用可追溯的近期或历史素材。
 - 新增 `recent_memory_used_ids`，并把模型报告的近期 memory ID 严格限制在实际候选内。

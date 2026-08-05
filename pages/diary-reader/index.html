@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#fff8fa">
+    <title>日记</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <p class="eyebrow">PRIVATE DIARY</p>
+        <h1>日记</h1>
+        <div class="month-nav" aria-label="选择月份">
+          <button id="previous-month" type="button" aria-label="上一个有日记的月份">‹</button>
+          <span id="month-label">加载中</span>
+          <button id="next-month" type="button" aria-label="下一个有日记的月份">›</button>
+        </div>
+      </header>
+
+      <nav id="days" class="days" aria-label="选择日期"></nav>
+      <p id="status" class="status" role="status">正在打开日记…</p>
+
+      <article id="entry" class="entry" hidden>
+        <div class="entry-meta"><time id="entry-date"></time><span id="mood" class="mood"></span></div>
+        <h2 id="entry-title"></h2>
+        <div id="markdown" class="markdown"></div>
+        <div id="tags" class="tags"></div>
+      </article>
+    </main>
+
+    <nav class="pager" aria-label="上一篇和下一篇">
+      <button id="previous-entry" type="button">上一篇</button>
+      <button id="next-entry" type="button">下一篇</button>
+    </nav>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

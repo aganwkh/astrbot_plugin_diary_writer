@@ -8,6 +8,11 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
+
+PLUGIN_ROOT = Path(__file__).resolve().parent
+PLUGIN_DATA_ROOT = PLUGIN_ROOT / "data" / "diary_writer"
+PUBLIC_SITE_ASSETS = PLUGIN_ROOT / "pages" / "diary-reader"
+
 if __package__:
     # AstrBot imports plugins below ``data.plugins``.  Relative imports keep the
     # bundled diary package reachable without adding the plugin root to sys.path.
@@ -17,7 +22,7 @@ if __package__:
     from .diary.corrections import CorrectionError, CorrectionService
     from .diary.maintenance import GLOBAL_MAINTENANCE_GATE
     from .diary.memory_source import SQLiteLivingMemorySource
-    from .diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from .diary.migration import migrate_legacy_directory, migrate_legacy_markdown, migrate_plugin_data_directory
     from .diary.models import GenerationState
     from .diary.permissions import (
         can_access_sensitive_diary,
@@ -30,6 +35,7 @@ if __package__:
     from .diary.schedule import should_generate, should_run_regular_check
     from .diary.service import DiaryService, diary_changed
     from .diary.storage import DiaryStorage
+    from .diary.public_site import DiaryPublicSite
     from .diary.web_api import DiaryWebApi
 else:
     # The offline smoke suite loads main.py as a standalone module.
@@ -39,7 +45,7 @@ else:
     from diary.corrections import CorrectionError, CorrectionService
     from diary.maintenance import GLOBAL_MAINTENANCE_GATE
     from diary.memory_source import SQLiteLivingMemorySource
-    from diary.migration import migrate_legacy_directory, migrate_legacy_markdown
+    from diary.migration import migrate_legacy_directory, migrate_legacy_markdown, migrate_plugin_data_directory
     from diary.models import GenerationState
     from diary.permissions import (
         can_access_sensitive_diary,
@@ -52,6 +58,7 @@ else:
     from diary.schedule import should_generate, should_run_regular_check
     from diary.service import DiaryService, diary_changed
     from diary.storage import DiaryStorage
+    from diary.public_site import DiaryPublicSite
     from diary.web_api import DiaryWebApi
 
 
@@ -63,13 +70,14 @@ def _message_text(event) -> str:
     return str(value or "").lstrip()
 
 
-@register("astrbot_plugin_diary_writer", "aganwkh", "1.1.2", "私密、可追溯的长期 AI 日记")
+@register("astrbot_plugin_diary_writer", "aganwkh", "1.1.3", "私密、可追溯的长期 AI 日记")
 class DiaryWriterPlugin(Star):
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = DiaryConfig.from_mapping(config)
         data_root = Path(get_astrbot_data_path())
-        root = data_root / "plugin_data" / "astrbot_plugin_diary_writer"
+        root = PLUGIN_DATA_ROOT
+        self.legacy_plugin_root = data_root / "plugin_data" / "astrbot_plugin_diary_writer"
         self.legacy_diary_root = data_root / "plugin_data" / "diary_writer" / "diaries"
         self.storage = DiaryStorage(root)
         self.service = DiaryService(
@@ -86,12 +94,16 @@ class DiaryWriterPlugin(Star):
             self._after_daily_unlocked, self._astrbot_persona_prompt,
         )
         self.web_api.register()
+        self.public_site = DiaryPublicSite(self.storage, PUBLIC_SITE_ASSETS, self.config.public_site_port)
         self._reminder_lock = asyncio.Lock()
 
     async def initialize(self):
         previous_dates = {path.stem for path in self.storage.metadata_root.glob("*.json")}
         async with GLOBAL_MAINTENANCE_GATE.operation():
+            migrated_plugin_data = migrate_plugin_data_directory(self.legacy_plugin_root, self.storage)
             migrated = migrate_legacy_directory(self.legacy_diary_root, self.storage)
+            if migrated_plugin_data:
+                logger.info("[DiaryWriter] copied existing plugin data into the plugin directory")
             if migrated:
                 logger.info(f"[DiaryWriter] migrated {migrated} v0.2 diary files")
                 for path in self.storage.metadata_root.glob("*.json"):
@@ -100,6 +112,10 @@ class DiaryWriterPlugin(Star):
                             self.reviews.mark_daily_changed(datetime.strptime(path.stem, "%Y-%m-%d").date(), "legacy_metadata_migrated")
                         except ValueError:
                             continue
+        try:
+            await self.public_site.start()
+        except OSError as exc:
+            logger.warning(f"[DiaryWriter] public diary site could not start: {exc}")
         try:
             jobs = await self.context.cron_manager.list_jobs()
             for job in jobs:
@@ -119,6 +135,9 @@ class DiaryWriterPlugin(Star):
         except Exception as exc:
             logger.error(f"[DiaryWriter] could not register cron jobs: {exc}")
         await self._daily_finalization()
+
+    async def terminate(self):
+        await self.public_site.stop()
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_user_message(self, event: AstrMessageEvent):

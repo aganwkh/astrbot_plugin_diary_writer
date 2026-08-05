@@ -113,6 +113,7 @@ def load_plugin(data_root: Path, module_name: str = "offline_main"):
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(module)
+    module.PLUGIN_DATA_ROOT = data_root / "plugins" / "astrbot_plugin_diary_writer" / "data"
     return module
 
 
@@ -121,6 +122,15 @@ async def collect(generator):
 
 
 class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _public_site_stub(plugin):
+        class Site:
+            started = stopped = 0
+            async def start(self): self.started += 1
+            async def stop(self): self.stopped += 1
+        plugin.public_site = Site()
+        return plugin.public_site
+
     async def test_diary_resolves_the_selected_astrbot_conversation_persona(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))
@@ -155,7 +165,10 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
                 Context(),
                 {"owner_ids": ["1"], "auto_write_enabled": False},
             )
+            site = self._public_site_stub(plugin)
             await plugin.initialize()
+            await plugin.terminate()
+            self.assertEqual((site.started, site.stopped), (1, 1))
 
     async def test_initialize_registers_original_cron_windows_only_when_enabled(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -163,10 +176,12 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             enabled_context = Context()
             enabled_context.cron_manager.existing_jobs = [types.SimpleNamespace(name="DiaryWriter_previous", job_id="old"), types.SimpleNamespace(name="Other", job_id="keep")]
             enabled = plugin_module.DiaryWriterPlugin(enabled_context, {"owner_ids": ["1"], "auto_write_enabled": True})
+            self._public_site_stub(enabled)
             await enabled.initialize()
             self.assertEqual([job["cron_expression"] for job in enabled_context.cron_manager.jobs], ["*/10 0-3 * * *", "0 4 * * *", "10 4 * * *"])
             self.assertEqual(enabled_context.cron_manager.deleted, ["old"])
             self.assertGreaterEqual(len(enabled_context.web_routes), 8)
+            await enabled.terminate()
 
             disabled_context = Context()
             disabled_context.cron_manager.existing_jobs = [
@@ -174,9 +189,11 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
                 types.SimpleNamespace(name="Other", job_id="keep"),
             ]
             disabled = plugin_module.DiaryWriterPlugin(disabled_context, {"owner_ids": ["1"], "auto_write_enabled": False})
+            self._public_site_stub(disabled)
             await disabled.initialize()
             self.assertEqual(disabled_context.cron_manager.jobs, [])
             self.assertEqual(disabled_context.cron_manager.deleted, ["old"])
+            await disabled.terminate()
 
     async def test_cron_obeys_inactivity_and_four_am_fallback_paths(self):
         with tempfile.TemporaryDirectory() as temp:

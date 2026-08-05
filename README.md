@@ -1,8 +1,8 @@
 # 日记
 
-基于 LivingMemory 的私密、可追溯长期 AI 日记插件。v1.1.1 以 daily JSON 与用户确认的 correction 为事实源，同时保存 Markdown 与结构化 metadata，并把日记主要事件关联到实际的 LivingMemory memory ID。
+基于 LivingMemory 的可追溯长期 AI 日记插件。日记数据保存在插件目录，内置一个面向手机的公开只读日记站。
 
-当前稳定版：[v1.1.1](https://github.com/aganwkh/astrbot_plugin_diary_writer/releases/tag/v1.1.1)
+当前版本：v1.1.3
 
 ## 已验证兼容性
 
@@ -10,7 +10,7 @@
 - LivingMemory 2.3.6 / schema 8
 - Python 3.12
 
-升级前建议备份完整 `plugin_data`。网站同步默认关闭。
+升级前请备份插件目录内的 `data/diary_writer/`。
 
 ## 命令与权限
 
@@ -43,21 +43,21 @@
 
 ## 数据与迁移
 
-v1.0 数据保存在 AstrBot 标准数据目录的 `plugin_data/astrbot_plugin_diary_writer/`：
+日记插件拥有的数据保存在插件安装目录的 `data/diary_writer/`：
 
 - `diaries/YYYY-MM-DD.md`：供人阅读的日记。
 - `metadata/YYYY-MM-DD.json`：事件、证据 memory IDs、主题、心情和生成信息。
 - `continuity.json` 与 `generation_state.json`：连续性和可恢复生成状态。
 - `backups/`：重写前的 Markdown/metadata 备份。
 
-初始化时会从旧版 `plugin_data/diary_writer/diaries/` 复制 Markdown 到新目录并补建 metadata；旧文件始终保留且不会被改写。对于已经位于新目录但缺少 JSON 的旧 Markdown，也只补 metadata，不会重新调用模型覆盖正文。
+首次启动时，如果发现旧版 `plugin_data/astrbot_plugin_diary_writer/`，会完整复制到 `data/diary_writer/`，旧目录不会被删除；之后也会从更早的 `plugin_data/diary_writer/diaries/` 复制 Markdown 并补建 metadata。已有 Markdown 缺少 JSON 时只补 metadata，不会重新调用模型覆盖正文。
 
 ## 配置要点
 
 - `owner_ids` 默认为空，必须显式配置授权用户。
 - `generation_provider_id` 用于自动生成；留空时仅能使用触发私聊的模型。
 - 日记作者直接继承当前私聊会话选中的 AstrBot 人格；可在 `diary_main_prompt` 中自由编辑日记主提示词，插件仅自动附加素材、日期、证据和输出契约。
-- 网站同步默认关闭；只有同时设置 `website_sync_enabled` 和 `website_sync_path` 才会写入目标目录，失败不会影响本地日记。
+- 内置公开日记站默认监听 `0.0.0.0:8788`；手机直接访问 `http://服务器公网IP:8788`。它无需登录，任何能访问此地址的人都能阅读全部日记，仅提供阅读，不提供搜索、编辑、来源证据或管理接口。可通过 `public_site_port` 改端口，并在服务器防火墙和安全组放行该 TCP 端口。
 - `livingmemory_db_path` 可覆盖默认的 LivingMemory SQLite 路径。
 
 ## 当前 LivingMemory 兼容范围

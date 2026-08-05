@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .config import DiaryConfig
@@ -15,7 +14,6 @@ from .models import ContinuityState, DiaryEvent, DiaryMetadata, GenerationState,
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .prompts import ADAPTIVE_PROMPT_VERSION, NORMAL_PROMPT_VERSION, ParsedDiary, build_adaptive_messages, build_messages, parse_diary_response
 from .storage import DiaryStorage
-from .website_sync import WebsiteSync
 
 PROVIDER_TIMEOUT_SECONDS = 120
 
@@ -132,11 +130,6 @@ class DiaryService:
             self.storage.delete_daily_activity(date_text)
             completed_at = self._now()
             self.storage.save_generation_state(GenerationState(retry_count=state.retry_count, last_success_at=completed_at, updated_at=completed_at))
-            if self.config.website_sync_enabled and self.config.website_sync_path:
-                try:
-                    WebsiteSync(Path(self.config.website_sync_path)).sync(date_text, parsed.markdown, parsed.metadata)
-                except Exception:
-                    pass
             return DiaryGenerationResult(str(self.storage.diary_path(date_text)), True)
         except Exception as exc:
             state.stage = "failed"

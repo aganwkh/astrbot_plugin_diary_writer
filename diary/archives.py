@@ -99,7 +99,7 @@ class ArchiveService:
         manifest_files = [{"path": name, "size": path.stat().st_size, "sha256": _sha256_file(path)} for name, path in files]
         manifest = {
             "format_version": ARCHIVE_FORMAT,
-            "plugin_version": "1.1.2",
+            "plugin_version": "1.1.3",
             "created_at": _utc_now(),
             "plugin_data_format": "v0.3-v1.1",
             "settings_restore_policy": "exported_safe_settings_are_not_restored",

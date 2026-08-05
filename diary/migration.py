@@ -1,8 +1,33 @@
+import os
+import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import DiaryMetadata
 from .storage import DiaryStorage, atomic_write_text
+
+
+def migrate_plugin_data_directory(source_root: Path, storage: DiaryStorage) -> bool:
+    """Copy the former AstrBot plugin data directory into plugin-owned storage once."""
+    source_root = Path(source_root)
+    target_root = storage.root
+    if not source_root.is_dir() or target_root.exists():
+        return False
+    try:
+        if source_root.resolve() == target_root.resolve() or any(path.is_symlink() for path in source_root.rglob("*")):
+            return False
+    except OSError:
+        return False
+    staging = target_root.parent / f".{target_root.name}.migration-{uuid.uuid4().hex}"
+    try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_root, staging)
+        os.replace(staging, target_root)
+        return True
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 def migrate_legacy_markdown(storage: DiaryStorage, date: str) -> bool:

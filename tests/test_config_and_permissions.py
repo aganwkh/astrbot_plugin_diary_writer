@@ -59,6 +59,13 @@ class ConfigAndPermissionTests(unittest.TestCase):
         capped = config.DiaryConfig.from_mapping({"historical_memory_max_count": 9})
         self.assertEqual(capped.historical_memory_max_count, 5)
 
+    def test_public_site_port_is_bounded_and_legacy_sync_settings_are_ignored(self):
+        config = load_module("diary.config")
+        settings = config.DiaryConfig.from_mapping({"public_site_port": 8788, "website_sync_enabled": True})
+        self.assertEqual(settings.public_site_port, 8788)
+        self.assertEqual(config.DiaryConfig.from_mapping({"public_site_port": 99999}).public_site_port, 65535)
+        self.assertFalse(hasattr(settings, "website_sync_enabled"))
+
 
 if __name__ == "__main__":
     unittest.main()

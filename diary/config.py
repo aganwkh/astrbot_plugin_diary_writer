@@ -21,8 +21,7 @@ class DiaryConfig:
     livingmemory_db_path: str = ""
     generation_provider_id: str = ""
     diary_main_prompt: str = ""
-    website_sync_enabled: bool = False
-    website_sync_path: str = ""
+    public_site_port: int = 8788
     provider_retry_count: int = 2
     inactive_minutes: int = 90
     fallback_inactive_minutes: int = 60
@@ -43,8 +42,7 @@ class DiaryConfig:
             livingmemory_db_path=str(raw.get("livingmemory_db_path", "") or "").strip(),
             generation_provider_id=str(raw.get("generation_provider_id", "") or "").strip(),
             diary_main_prompt=str(raw.get("diary_main_prompt", "") or "").strip(),
-            website_sync_enabled=bool(raw.get("website_sync_enabled", False)),
-            website_sync_path=str(raw.get("website_sync_path", "") or "").strip(),
+            public_site_port=max(1, min(65535, int(raw.get("public_site_port", 8788) or 8788))),
             provider_retry_count=max(0, min(5, int(raw.get("provider_retry_count", 2) or 0))),
             inactive_minutes=max(1, int(raw.get("inactive_minutes", 90) or 90)),
             fallback_inactive_minutes=max(1, int(raw.get("fallback_inactive_minutes", 60) or 60)),

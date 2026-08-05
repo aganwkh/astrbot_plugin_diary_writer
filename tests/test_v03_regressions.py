@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import tempfile
 import unittest
 from datetime import date, datetime
@@ -80,93 +79,7 @@ class V03RegressionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(storage.metadata_path("2026-07-25").exists())
             self.assertEqual(storage.load_generation_state().stage, "failed")
 
-    async def test_website_failure_does_not_remove_local_diary(self):
-        import diary.service as module
-
-        class BrokenSync:
-            def __init__(self, _path): pass
-            def sync(self, *_args): raise OSError("website unavailable")
-
-        with tempfile.TemporaryDirectory() as temp:
-            storage = DiaryStorage(Path(temp))
-            config = DiaryConfig.from_mapping({"owner_ids": ["1"], "website_sync_enabled": True, "website_sync_path": str(Path(temp) / "site")})
-            original = module.WebsiteSync
-            module.WebsiteSync = BrokenSync
-            try:
-                result = await module.DiaryService(config, storage, Source()).generate(date(2026, 7, 25), Provider())
-            finally:
-                module.WebsiteSync = original
-            self.assertTrue(result)
-            self.assertTrue(storage.has_diary("2026-07-25"))
-
-
 class MigrationAndStorageTests(unittest.TestCase):
-    def test_website_sync_preserves_legacy_index_and_public_permissions(self):
-        from diary.website_sync import WebsiteSync
-        with tempfile.TemporaryDirectory() as temp:
-            data = Path(temp) / "data"
-            target = data / "diaries"
-            target.mkdir(parents=True)
-            index = data / "diaries.json"
-            index.write_text(json.dumps([
-                {"date": "2026.07.23", "title": "old", "mood": "", "tags": [], "file": "diaries/2026-07-23.md"},
-            ]), encoding="utf-8")
-            os.chmod(index, 0o644)
-
-            WebsiteSync(target).sync(
-                "2026-07-25",
-                "# new",
-                DiaryMetadata(date="2026-07-25", title="new"),
-            )
-
-            entries = json.loads(index.read_text(encoding="utf-8"))
-            self.assertEqual([entry["date"] for entry in entries], ["2026.07.25", "2026.07.23"])
-            self.assertEqual(entries[0]["file"], "diaries/2026-07-25.md")
-            self.assertEqual(index.stat().st_mode & 0o777, 0o644)
-            self.assertEqual((target / "2026-07-25.md").stat().st_mode & 0o777, 0o644)
-
-    def test_website_sync_deduplicates_mixed_date_separators(self):
-        from diary.website_sync import WebsiteSync
-        with tempfile.TemporaryDirectory() as temp:
-            data = Path(temp) / "data"
-            target = data / "diaries"
-            target.mkdir(parents=True)
-            index = data / "diaries.json"
-            index.write_text(json.dumps([
-                {"date": "2026.07.25", "title": "old dotted", "file": "diaries/2026-07-25.md"},
-                {"date": "2026-07-25", "title": "old dashed", "file": "2026-07-25.md"},
-            ]), encoding="utf-8")
-
-            WebsiteSync(target).sync(
-                "2026-07-25",
-                "# replacement",
-                DiaryMetadata(date="2026-07-25", title="replacement"),
-            )
-
-            entries = json.loads(index.read_text(encoding="utf-8"))
-            self.assertEqual(len(entries), 1)
-            self.assertEqual(entries[0]["date"], "2026.07.25")
-            self.assertEqual(entries[0]["file"], "diaries/2026-07-25.md")
-
-    def test_website_sync_never_replaces_an_unreadable_existing_index(self):
-        from diary.website_sync import WebsiteSync
-        with tempfile.TemporaryDirectory() as temp:
-            data = Path(temp) / "data"
-            target = data / "diaries"
-            target.mkdir(parents=True)
-            index = data / "diaries.json"
-            original = b"not valid json\n"
-            index.write_bytes(original)
-
-            with self.assertRaises(OSError):
-                WebsiteSync(target).sync(
-                    "2026-07-25",
-                    "# new",
-                    DiaryMetadata(date="2026-07-25", title="new"),
-                )
-
-            self.assertEqual(index.read_bytes(), original)
-
     def test_legacy_v02_directory_is_copied_without_changing_source_markdown(self):
         from diary.migration import migrate_legacy_directory
         with tempfile.TemporaryDirectory() as temp:
