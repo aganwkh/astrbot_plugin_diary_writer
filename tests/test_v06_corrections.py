@@ -5,7 +5,6 @@ from datetime import date
 from pathlib import Path
 
 from diary.corrections import CorrectionError, CorrectionService as AsyncCorrectionService
-from diary.reviews import ReviewService
 from diary.storage import DiaryStorage, atomic_write_json, atomic_write_text
 
 
@@ -137,14 +136,6 @@ class CorrectionsTests(unittest.TestCase):
             self.assertNotIn("event_id", snapshot["events"][0])
             self.assertNotIn("fact_records", snapshot["events"][0])
             self.assertIn("event_id", storage.load_metadata("2025-07-25")["events"][0])
-
-    def test_actual_fact_change_marks_existing_week_month_and_year_stale(self):
-        with tempfile.TemporaryDirectory() as temp:
-            storage = DiaryStorage(Path(temp)); write_daily(storage)
-            for kind, period in (("weekly", "2025-W30"), ("monthly", "2025-07"), ("yearly", "2025")):
-                storage.write_review(kind, period, "# review", {"summary_stale": False})
-            CorrectionService(storage, ReviewService(storage)).replace("2025-07-25", "projects", "Alpha", "Beta")
-            self.assertTrue(all(storage.load_review_metadata(kind, period)["summary_stale"] for kind, period in (("weekly", "2025-W30"), ("monthly", "2025-07"), ("yearly", "2025"))))
 
     def test_correction_post_snapshot_failure_restores_current_and_removes_partial_history(self):
         with tempfile.TemporaryDirectory() as temp:

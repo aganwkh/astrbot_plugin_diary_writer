@@ -3,15 +3,47 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from calendar import monthrange
+from datetime import date, datetime, timezone
+from hashlib import sha256
 from typing import Any, Awaitable, Callable
 
 from .config import DiaryConfig
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
-from .reviews import core_fingerprint, period_dates
 from .storage import DiaryStorage, atomic_write_json
 
 PROVIDER_TIMEOUT_SECONDS = 120
+
+
+def period_dates(kind: str, period: str) -> list[date]:
+    if kind == "monthly":
+        year, month = (int(value) for value in period.split("-", 1))
+        return [date(year, month, day) for day in range(1, monthrange(year, month)[1] + 1)]
+    if kind == "yearly":
+        year = int(period)
+        return [date(year, month, day) for month in range(1, 13) for day in range(1, monthrange(year, month)[1] + 1)]
+    raise ValueError("reflection kind must be monthly or yearly")
+
+
+def _canonical_event(event: Any) -> Any:
+    if not isinstance(event, dict):
+        return event
+    result = {key: value for key, value in event.items() if key not in {"event_id", "fact_records"}}
+    if not isinstance(result.get("facts"), list):
+        result["facts"] = []
+    if not result["facts"] and isinstance(event.get("fact_records"), list):
+        result["facts"] = [str(item.get("value") or "") for item in event["fact_records"] if isinstance(item, dict) and str(item.get("value") or "")]
+    return result
+
+
+def core_fingerprint(metadata: dict[str, Any]) -> str:
+    """Ignore storage-only IDs when checking whether a reflection source changed."""
+    fields = ("title", "mood", "mood_score", "topics", "people", "projects", "events", "highlights", "unresolved", "ongoing_topics", "memory_ids")
+    lists = {"topics", "people", "projects", "events", "highlights", "unresolved", "ongoing_topics", "memory_ids"}
+    core = {field: ([] if field in lists and metadata.get(field) is None else ("" if field in {"title", "mood"} and metadata.get(field) is None else metadata.get(field))) for field in fields}
+    if isinstance(core["events"], list):
+        core["events"] = [_canonical_event(event) for event in core["events"]]
+    return sha256(json.dumps(core, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 class ReflectionError(ValueError):

@@ -137,56 +137,16 @@ class WebApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_daily_generation_uses_configured_provider_and_force(self):
         self.api.config.generation_provider_id = "configured"
-        called = []
-
-        async def after_daily(*args):
-            called.append(args)
-
-        self.api.after_daily = after_daily
         self.request(payload={"kind": "daily", "period": "2024-01-01", "force": True})
         result = await self.api.generate()
         self.assertEqual(result, {"kind": "daily", "period": "2024-01-01", "generated": True})
         self.assertEqual(self.context.providers, ["configured"])
         self.assertTrue(self.service.calls[0][1]["force"])
-        self.assertEqual(called[0][2], "daily_rewritten")
-
-    async def test_existing_non_force_daily_does_not_stale_derived_reviews(self):
-        from diary.config import DiaryConfig
-        from diary.reviews import ReviewService
-        from diary.service import DiaryService
-        from tests.test_v05_yearly import Provider, daily
-
-        class UnusedSource:
-            def read_day(self, *_args, **_kwargs):
-                raise AssertionError("existing daily must not read LivingMemory")
-
-        daily(self.storage, "2024-01-01")
-        self.storage.diary_path("2024-01-01").parent.mkdir(parents=True, exist_ok=True)
-        self.storage.diary_path("2024-01-01").write_text("# existing\n", encoding="utf-8")
-        reviews = ReviewService(self.storage)
-        for kind, period in (("weekly", "2024-W01"), ("monthly", "2024-01"), ("yearly", "2024")):
-            self.assertTrue(await reviews.generate(kind, period, Provider()))
-        callbacks = []
-
-        async def after_daily(*args):
-            callbacks.append(args)
-
-        self.api.service = DiaryService(DiaryConfig(), self.storage, UnusedSource())
-        self.api.reviews, self.api.after_daily = reviews, after_daily
-        self.api.config.generation_provider_id = "configured"
-        self.request(payload={"kind": "daily", "period": "2024-01-01", "force": False})
-        self.assertTrue((await self.api.generate())["generated"])
-        self.assertEqual(callbacks, [])
-        self.assertTrue(all(not self.storage.load_review_metadata(kind, period)["summary_stale"] for kind, period in (("weekly", "2024-W01"), ("monthly", "2024-01"), ("yearly", "2024"))))
 
     async def test_overview_redacts_raw_generation_errors(self):
         atomic_write_json(self.storage.state_path, {
             "pending_date": "2024-01-01", "stage": "failed", "retry_count": 2,
             "last_error": "token=secret C:\\private\\diary.md", "updated_at": "now", "last_success_at": "then",
-        })
-        atomic_write_json(self.storage.review_state_path, {
-            "pending_period": "2024", "stage": "failed", "last_error": "provider says secret",
-            "entries": {"yearly:2024": {"pending_period": "2024", "stage": "failed", "last_error": "/private/path"}},
         })
         self.request()
         result = await self.api.overview()
@@ -197,8 +157,6 @@ class WebApiTests(unittest.IsolatedAsyncioTestCase):
             "pending_date": "2024-01-01", "stage": "failed", "retry_count": 2,
             "updated_at": "now", "last_success_at": "then", "failed": True,
         })
-        self.assertTrue(result["review_generation_state"]["failed"])
-        self.assertEqual(result["review_generation_state"]["entries"][0]["pending_period"], "2024")
 
     async def test_generate_failure_does_not_echo_provider_exception(self):
         class FailingService(Service):

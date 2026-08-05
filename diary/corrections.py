@@ -10,7 +10,6 @@ from typing import Any
 from .models import normalize_daily_metadata
 from .maintenance import GLOBAL_MAINTENANCE_GATE, MaintenanceGate
 from .reflections import mark_reflections_stale
-from .reviews import ReviewService, core_fingerprint
 from .storage import DiaryStorage
 
 
@@ -23,9 +22,8 @@ _SCALAR_FIELDS = {"title", "mood"}
 
 
 class CorrectionService:
-    def __init__(self, storage: DiaryStorage, reviews: ReviewService | None = None, gate: MaintenanceGate | None = None):
+    def __init__(self, storage: DiaryStorage, gate: MaintenanceGate | None = None):
         self.storage = storage
-        self.reviews = reviews or ReviewService(storage)
         self.gate = gate or GLOBAL_MAINTENANCE_GATE
 
     def ensure_stable_ids(self, diary_date: str) -> dict[str, Any]:
@@ -199,8 +197,7 @@ class CorrectionService:
         return list(reversed(result))
 
     def _mark_stale_if_changed(self, diary_date: str, before: dict[str, Any], after: dict[str, Any], reason: str) -> None:
-        if core_fingerprint(before) != core_fingerprint(after):
-            self.reviews.mark_daily_changed(date.fromisoformat(diary_date), reason)
+        if before != after:
             mark_reflections_stale(self.storage, diary_date, reason)
 
     def _metadata(self, diary_date: str) -> dict[str, Any]:

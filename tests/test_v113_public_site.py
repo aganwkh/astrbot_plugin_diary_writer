@@ -26,6 +26,19 @@ class PluginDataMigrationTests(unittest.TestCase):
             self.assertFalse(migrate_plugin_data_directory(legacy, storage))
 
 
+class DiaryReaderAssetTests(unittest.TestCase):
+    def test_date_strip_uses_versioned_assets_without_a_visual_scroll_cue(self):
+        root = Path(__file__).resolve().parents[1] / "pages" / "diary-reader"
+        index = (root / "index.html").read_text(encoding="utf-8")
+        styles = (root / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('href="/styles.css?v=1.1.3-7"', index)
+        self.assertIn('src="/app.js?v=1.1.3-7"', index)
+        self.assertNotIn('scroll-cue', index)
+        self.assertNotIn('scroll-cue', styles)
+        self.assertNotIn('reader-kinds', index)
+        self.assertNotIn('reader-kind', styles)
+
 class PublicDiarySiteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -64,10 +77,12 @@ class PublicDiarySiteTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("events", entry)
         self.assertNotIn("secret", str(entry))
 
+
     async def test_public_site_has_no_write_or_path_escape_route(self):
         self.assertEqual((await self.client.post("/api/months")).status, 405)
         self.assertEqual((await self.client.get("/api/entries/not-a-date")).status, 404)
         self.assertEqual((await self.client.get("/api/entries/%2E%2E%2Fmain.py")).status, 404)
+        self.assertEqual((await self.client.get("/api/reviews/weekly")).status, 404)
 
     async def test_start_and_stop_own_the_listener_lifecycle(self):
         assets = Path(__file__).resolve().parents[1] / "pages" / "diary-reader"

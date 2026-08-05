@@ -31,9 +31,8 @@ if __package__:
         private_only_reminder,
     )
     from .diary.retrieval import on_this_day, timeline
-    from .diary.reviews import ReviewService
     from .diary.schedule import should_generate, should_run_regular_check
-    from .diary.service import DiaryService, diary_changed
+    from .diary.service import DiaryService
     from .diary.storage import DiaryStorage
     from .diary.public_site import DiaryPublicSite
     from .diary.web_api import DiaryWebApi
@@ -54,9 +53,8 @@ else:
         private_only_reminder,
     )
     from diary.retrieval import on_this_day, timeline
-    from diary.reviews import ReviewService
     from diary.schedule import should_generate, should_run_regular_check
-    from diary.service import DiaryService, diary_changed
+    from diary.service import DiaryService
     from diary.storage import DiaryStorage
     from diary.public_site import DiaryPublicSite
     from diary.web_api import DiaryWebApi
@@ -86,19 +84,16 @@ class DiaryWriterPlugin(Star):
             SQLiteLivingMemorySource(self.config.livingmemory_path(Path(get_astrbot_data_path()))),
             persona_resolver=self._astrbot_persona_prompt,
         )
-        self.reviews = ReviewService(self.storage, self.config)
-        self.corrections = CorrectionService(self.storage, self.reviews)
+        self.corrections = CorrectionService(self.storage)
         self.activity_tracker = DailyActivityTracker(self.storage, saved_rounds=2)
         self.web_api = DiaryWebApi(
-            context, self.config, self.storage, self.service, self.reviews,
-            self._after_daily_unlocked, self._astrbot_persona_prompt,
+            context, self.config, self.storage, self.service, self._astrbot_persona_prompt,
         )
         self.web_api.register()
         self.public_site = DiaryPublicSite(self.storage, PUBLIC_SITE_ASSETS, self.config.public_site_port)
         self._reminder_lock = asyncio.Lock()
 
     async def initialize(self):
-        previous_dates = {path.stem for path in self.storage.metadata_root.glob("*.json")}
         async with GLOBAL_MAINTENANCE_GATE.operation():
             migrated_plugin_data = migrate_plugin_data_directory(self.legacy_plugin_root, self.storage)
             migrated = migrate_legacy_directory(self.legacy_diary_root, self.storage)
@@ -106,12 +101,6 @@ class DiaryWriterPlugin(Star):
                 logger.info("[DiaryWriter] copied existing plugin data into the plugin directory")
             if migrated:
                 logger.info(f"[DiaryWriter] migrated {migrated} v0.2 diary files")
-                for path in self.storage.metadata_root.glob("*.json"):
-                    if path.stem not in previous_dates:
-                        try:
-                            self.reviews.mark_daily_changed(datetime.strptime(path.stem, "%Y-%m-%d").date(), "legacy_metadata_migrated")
-                        except ValueError:
-                            continue
         try:
             await self.public_site.start()
         except OSError as exc:
@@ -235,8 +224,7 @@ class DiaryWriterPlugin(Star):
             target = effective
             while target <= yesterday:
                 if self.storage.has_any_diary(target.isoformat()):
-                    if migrate_legacy_markdown(self.storage, target.isoformat()):
-                        self.reviews.mark_daily_changed(target, "legacy_metadata_migrated")
+                    migrate_legacy_markdown(self.storage, target.isoformat())
                 else:
                     if provider is None:
                         self.storage.save_generation_state(GenerationState(
@@ -247,12 +235,9 @@ class DiaryWriterPlugin(Star):
                     result = await self.service._generate_unlocked(target, provider)
                     if not result:
                         break
-                    await self._after_daily_unlocked(target, provider, "daily_added")
                 target += timedelta(days=1)
             state.update({"effective_date": effective.isoformat(), "last_finalization_at": now.astimezone().isoformat(), "last_checked_through": yesterday.isoformat()})
             self.storage.save_daily_finalization_state(state)
-            if provider is not None:
-                await self._catch_up_reviews_unlocked(provider)
 
     async def _automatic(self, inactive_minutes):
         now = datetime.now(); raw = self.storage.load_activity()
@@ -264,33 +249,9 @@ class DiaryWriterPlugin(Star):
         target = (now - timedelta(days=1)).date()
         async with GLOBAL_MAINTENANCE_GATE.operation():
             if self.storage.has_any_diary(target.isoformat()):
-                if migrate_legacy_markdown(self.storage, target.isoformat()):
-                    self.reviews.mark_daily_changed(target, "legacy_metadata_migrated")
+                migrate_legacy_markdown(self.storage, target.isoformat())
             else:
                 result = await self.service._generate_unlocked(target, provider)
-                if diary_changed(result):
-                    await self._after_daily_unlocked(target, provider, "daily_added")
-            await self._catch_up_reviews_unlocked(provider)
-
-    async def _after_daily(self, diary_date, provider, reason):
-        async with GLOBAL_MAINTENANCE_GATE.operation():
-            await self._after_daily_unlocked(diary_date, provider, reason)
-
-    async def _after_daily_unlocked(self, diary_date, provider, reason):
-        try:
-            await self.reviews._after_daily_written_unlocked(diary_date, provider, reason)
-        except Exception as exc:
-            logger.warning(f"[DiaryWriter] review update failed: {exc}")
-
-    async def _catch_up_reviews(self, provider):
-        async with GLOBAL_MAINTENANCE_GATE.operation():
-            await self._catch_up_reviews_unlocked(provider)
-
-    async def _catch_up_reviews_unlocked(self, provider):
-        try:
-            await self.reviews._catch_up_unlocked(provider)
-        except Exception as exc:
-            logger.warning(f"[DiaryWriter] review catch-up failed: {exc}")
 
     def _private(self, event): return can_access_sensitive_diary(event, self.config)
 
@@ -320,8 +281,6 @@ class DiaryWriterPlugin(Star):
                 target, provider, force=force,
                 persona_session_id=str(getattr(event, "unified_msg_origin", "") or ""),
             )
-            if diary_changed(result):
-                await self._after_daily_unlocked(target, provider, "daily_rewritten" if force else "daily_added")
         yield event.plain_result("日记已保存（重写已备份旧版本）。" if result else "生成失败；请查看 generation_state.json。")
 
     @filter.command("补写日记")
@@ -342,37 +301,6 @@ class DiaryWriterPlugin(Star):
             persona_session_id=str(getattr(event, "unified_msg_origin", "") or ""),
         )
         yield event.plain_result(draft[:3000] if draft else "预览生成失败；未写入任何日记文件。")
-
-    async def _review_write(self, event, kind, period, force):
-        if not self._private(event):
-            if is_authorized(event, self.config): yield event.plain_result(private_only_reminder())
-            return
-        result = await self.reviews.generate(kind, period, await self._provider(event), force=force)
-        yield event.plain_result(f"{kind}总结已保存。" if result else "总结生成失败；请查看 review_generation_state.json。")
-
-    @filter.command("补写周记")
-    async def backfill_weekly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "weekly", period, False): yield result
-
-    @filter.command("重写周记")
-    async def rewrite_weekly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "weekly", period, True): yield result
-
-    @filter.command("补写月记")
-    async def backfill_monthly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "monthly", period, False): yield result
-
-    @filter.command("重写月记")
-    async def rewrite_monthly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "monthly", period, True): yield result
-
-    @filter.command("补写年记")
-    async def backfill_yearly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "yearly", period, False): yield result
-
-    @filter.command("重写年记")
-    async def rewrite_yearly(self, event: AstrMessageEvent, period: str = ""):
-        async for result in self._review_write(event, "yearly", period, True): yield result
 
     @filter.command("纠正日记")
     async def correct_diary(self, event: AstrMessageEvent, instruction: str = ""):

@@ -59,10 +59,6 @@ class DiaryStorage:
         self.diary_root = root / "diaries"
         self.metadata_root = root / "metadata"
         self.backup_root = root / "backups"
-        self.review_root = root / "reviews"
-        self.review_metadata_root = root / "review_metadata"
-        self.review_backup_root = root / "review_backups"
-        self.review_state_path = root / "review_generation_state.json"
         self.state_path = root / "generation_state.json"
         self.continuity_path = root / "continuity.json"
         self.activity_path = root / "activity.json"
@@ -89,12 +85,6 @@ class DiaryStorage:
         self.validate_diary_date(value)
         return self.daily_activity_root / f"{value}.json"
 
-    def review_path(self, kind: str, period: str) -> Path:
-        return self.review_root / kind / f"{period}.md"
-
-    def review_metadata_path(self, kind: str, period: str) -> Path:
-        return self.review_metadata_root / kind / f"{period}.json"
-
     def reflection_path(self, kind: str, period: str) -> Path:
         return self.reflection_root / kind / f"{period}.md"
 
@@ -106,9 +96,6 @@ class DiaryStorage:
 
     def has_any_diary(self, date: str) -> bool:
         return self.diary_path(date).is_file()
-
-    def has_review(self, kind: str, period: str) -> bool:
-        return self.review_path(kind, period).is_file() and self.review_metadata_path(kind, period).is_file()
 
     def has_reflection(self, kind: str, period: str) -> bool:
         return self.reflection_path(kind, period).is_file() and self.reflection_metadata_path(kind, period).is_file()
@@ -156,26 +143,6 @@ class DiaryStorage:
             atomic_write_text(backup_dir / metadata_path.name, metadata_path.read_text(encoding="utf-8"))
         return backup_dir
 
-    def write_review(self, kind: str, period: str, markdown: str, metadata: dict[str, Any], backup_existing: bool = False) -> None:
-        markdown_path = self.review_path(kind, period)
-        metadata_path = self.review_metadata_path(kind, period)
-        if backup_existing and (markdown_path.exists() or metadata_path.exists()):
-            self.backup_review(kind, period)
-        self._write_pair(markdown_path, metadata_path, markdown, metadata)
-
-    def backup_review(self, kind: str, period: str) -> Path:
-        backup_dir = _new_backup_dir(self.review_backup_root, kind, period)
-        markdown_path = self.review_path(kind, period)
-        metadata_path = self.review_metadata_path(kind, period)
-        if markdown_path.exists():
-            atomic_write_text(backup_dir / markdown_path.name, markdown_path.read_text(encoding="utf-8"))
-        if metadata_path.exists():
-            atomic_write_text(backup_dir / metadata_path.name, metadata_path.read_text(encoding="utf-8"))
-        return backup_dir
-
-    def load_review_metadata(self, kind: str, period: str) -> dict[str, Any] | None:
-        return self._load_json(self.review_metadata_path(kind, period))
-
     def write_reflection(self, kind: str, period: str, markdown: str, metadata: dict[str, Any], backup_existing: bool = False) -> None:
         markdown_path = self.reflection_path(kind, period)
         metadata_path = self.reflection_metadata_path(kind, period)
@@ -194,17 +161,6 @@ class DiaryStorage:
         if not self.reflection_metadata_root.exists():
             return
         for kind_path in self.reflection_metadata_root.iterdir():
-            if not kind_path.is_dir():
-                continue
-            for path in sorted(kind_path.glob("*.json")):
-                data = self._load_json(path)
-                if data is not None:
-                    yield kind_path.name, path.stem, data
-
-    def iter_review_metadata(self):
-        if not self.review_metadata_root.exists():
-            return
-        for kind_path in self.review_metadata_root.iterdir():
             if not kind_path.is_dir():
                 continue
             for path in sorted(kind_path.glob("*.json")):

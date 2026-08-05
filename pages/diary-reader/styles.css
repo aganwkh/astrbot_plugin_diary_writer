@@ -12,7 +12,7 @@ h1 { margin: 0; font-size: 2rem; letter-spacing: -.06em; }
 #month-label { text-align: center; font-weight: 750; }
 .days { display: flex; gap: 9px; overflow-x: auto; padding: 3px 8px 18px; scrollbar-width: none; scroll-snap-type: x proximity; }
 .days::-webkit-scrollbar { display: none; }
-.day { flex: 0 0 72px; min-height: 74px; padding: 10px 8px; border: 1px solid #ffe0ed; border-radius: 19px; background: #fffafb; text-align: left; scroll-snap-align: start; }
+.day { flex: none; width: 72px; min-height: 74px; padding: 10px 8px; border: 1px solid #ffe0ed; border-radius: 19px; background: #fffafb; text-align: left; scroll-snap-align: start; }
 .day strong, .day small { display: block; }
 .day strong { font-size: .95rem; }
 .day small { overflow: hidden; margin-top: 6px; color: #847786; font-size: .71rem; text-overflow: ellipsis; white-space: nowrap; }

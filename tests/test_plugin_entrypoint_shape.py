@@ -9,8 +9,10 @@ class PluginEntrypointShapeTests(unittest.TestCase):
         self.assertIn("from .diary.config import DiaryConfig", source)
         self.assertIn("can_access_sensitive_diary", source)
         self.assertIn("self.config.can_auto_write", source)
-        self.assertIn('@filter.command("补写年记")', source)
-        self.assertIn('@filter.command("重写年记")', source)
+        self.assertNotIn("ReviewService", source)
+        self.assertNotIn("补写周记", source)
+        self.assertNotIn("补写月记", source)
+        self.assertNotIn("补写年记", source)
         self.assertNotIn("/opt" + "/AstrBot", source)
         self.assertNotIn("USER_ID", source)
 

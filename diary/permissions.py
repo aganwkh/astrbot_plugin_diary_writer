@@ -5,7 +5,7 @@ from typing import Any
 from .config import DiaryConfig
 
 
-SENSITIVE_COMMANDS = frozenset({"查看日记", "测试日记", "补写日记", "重写日记", "补写周记", "重写周记", "补写月记", "重写月记", "补写年记", "重写年记", "问日记", "那年今日", "日记项目", "日记话题"})
+SENSITIVE_COMMANDS = frozenset({"查看日记", "测试日记", "补写日记", "重写日记", "问日记", "那年今日", "日记项目", "日记话题"})
 PRIVATE_TYPES = frozenset({"friendmessage", "private", "privatemessage", "private_message", "direct"})
 
 

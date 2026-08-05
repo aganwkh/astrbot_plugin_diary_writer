@@ -23,10 +23,6 @@
 | `/测试日记` | 只生成预览草稿，不写任何日记、状态或连续性数据 |
 | `/补写日记 YYYY-MM-DD` | 为没有日记的日期生成日记 |
 | `/重写日记 YYYY-MM-DD` | 重写并保留带时间戳的旧版本备份 |
-| `/补写周记 YYYY-Www` / `/重写周记 YYYY-Www` | 手动生成或重写周记；重写保留旧版本备份 |
-| `/补写月记 YYYY-MM` / `/重写月记 YYYY-MM` | 手动生成或重写月记；重写保留旧版本备份 |
-| `/补写年记 YYYY` | 从已有 daily JSON 补生成年度回顾 |
-| `/重写年记 YYYY` | 重写年度回顾并保留带时间戳的旧版本备份 |
 | `/纠正日记 YYYY-MM-DD field "旧值" -> "新值"` | 对唯一命中的当前结构化事实做确定性纠正；不调用 LLM |
 | `/问日记 <问题>` | 本地检索历史日记，并返回可追溯来源日期 |
 | `/那年今日` | 查看往年同月同日的真实日记摘要 |
@@ -64,19 +60,12 @@
 
 只读 adapter 兼容含 `documents(id, text, metadata)` 的 SQLite 存储，并会在缺库或字段不兼容时安全失败。AstrBot 4.26.7 与 LivingMemory 2.3.6 / schema 8 已完成真实 Linux 生产联调；LivingMemory 数据库始终只读。
 
-## 回顾与检索
+## 检索
 
-- 周记使用 ISO 周（周一至周日），月记使用自然月；均从 daily JSON 生成，不读取原始聊天。
-- 周日/月末 daily 成功落盘后会尝试生成已结束周期的总结；自动写作结束后还会补扫缺少总结的已结束周期。
-- 周/月 JSON 记录 `covered_dates`、`missing_dates` 和 daily 来源。缺失日期不会阻止生成。
-- 补写、重写或核心 metadata 变化不会覆盖已有总结，只会标记 `summary_stale=true`；用重写命令显式重建，并保留备份。
 - `/问日记 <问题>`、`/那年今日`、`/日记项目 <名称>`、`/日记话题 <名称>` 仅限私聊。Ask Diary 先本地检索，并始终给出来源日期。
-- 手动总结命令：`/补写周记 YYYY-Www`、`/重写周记 YYYY-Www`、`/补写月记 YYYY-MM`、`/重写月记 YYYY-MM`。
 
 ## 长期观察与管理页
 
-- 年记使用自然年，保存独立 Markdown 与 JSON，并与周/月一样保留覆盖日期、缺失日期、来源、`summary_stale`、原子写入、备份和失败状态。`/补写年记 YYYY` 与 `/重写年记 YYYY` 仅限授权私聊。
-- 年记的事件、项目、话题、情绪和数量统计只来自 daily JSON；monthly 仅作为高层叙事与周期变化上下文，不参与事实计数，避免重复统计。
 - 趋势统计只读取 daily metadata：心情评分、常见话题/项目、活跃项目变化、每月日记/事件/未完成事项数量。它是描述性统计，不做心理诊断，也不会写回 daily 或 continuity。
 - `on_this_day_reminder_enabled` 默认关闭。开启后只会在授权用户当天首次发送的普通私聊消息时提示真实的往年同日记录；命令、群聊和后续消息不会触发，监听器不阻断原消息处理。
 - AstrBot 管理端提供 `diary-manager` Plugin Page，用于浏览、搜索、趋势、stale/生成状态、来源证据和手动生成。静态资源不携带日记、人物、项目、证据、凭据或配置；所有私密内容均按需通过 Dashboard 鉴权的 plugin-local API 读取。前端将 API 文本视为不可信数据，以 DOM `textContent` 渲染，不拼接到 `innerHTML`。
@@ -88,7 +77,7 @@ Plugin Page 已在真实 AstrBot Dashboard 验证身份中间件、bridge 加载
 
 - v1.1 生效日开始，每个自然日都会在 04:10 进行 Daily Finalization：若昨天尚无正式 daily，就按当天素材尝试生成。素材不足不再是跳过理由；Provider、I/O 或 LivingMemory 读取失败仍会记录为失败并在后续流程重试。
 - 插件首次启动会原子保存 v1.1 生效日期。启动和 04:10 都只补该日期至昨天的缺口，绝不自动追溯 v1.1 之前的空档；补写历史日期时只读取目标日期之前的 LivingMemory，避免时间穿越。
-- daily 有两种 `entry_type`：`normal`（当天 LivingMemory 至少 5 条）与 `low_activity`（当天 LivingMemory 不超过 4 条）；私聊轮数不再影响分类。两者都进入周/月/年回顾。
+- daily 有两种 `entry_type`：`normal`（当天 LivingMemory 至少 5 条）与 `low_activity`（当天 LivingMemory 不超过 4 条）；私聊轮数不再影响分类。
 - `daily_activity/YYYY-MM-DD.json` 只追踪授权私聊的有效入站消息。前两轮保存用户原文与时间；第三轮起仅增加计数。AstrBot 4.26.7 没有可靠的“最终机器人回复”监听钩子，因此不会猜测或伪造 assistant 回复。生成成功后 activity 文件删除；失败时保留以便重试。
 - low_activity 使用目标日前 3 天、同一私聊会话的真实 LivingMemory 作为辅助，并从同一私聊会话的历史 memory 中随机抽 3–5 条，按时间层级、importance 和 30 天软冷却加权；只有模型明确报告实际写入正文的候选 memory 才会进入冷却。
 - low_activity 首次生成会把聊天来源、近期来源、随机候选及实际使用 IDs 写入 metadata。`/重写日记` 复用这些已保存来源，不重新随机。
@@ -101,6 +90,6 @@ Plugin Page 已在真实 AstrBot Dashboard 验证身份中间件、bridge 加载
 
 - `/纠正日记 YYYY-MM-DD field "旧值" -> "新值"` 只接受唯一、精确的当前字段值；不会调用 LLM，也不会顺带改写其他事实。事件事实请在 `diary-manager` 按需读取该日 metadata 后选择稳定的 `event_id` / `fact_id` 再修改。无法安全确定正文位置时，Markdown 只追加更正注记，结构化 metadata 与 correction ledger 是当前事实。
 - 每次纠错或回滚都会先保留 revision。revision 记录 parent、导致它的 correction，以及 rollback 的来源和目标；correction 的 `active`、`superseded`、`rolled_back` 状态让历史链可审计。当前检索、Ask Diary、趋势与生命周期只读取已纠正的 daily metadata。
-- `archive_exports/` 保存 ZIP + manifest + SHA-256 校验的手动导出；归档包含日记、reviews、revision/correction、continuity 和非敏感运行状态，不会递归打包历史 ZIP，也不会恢复设置、密码或实例配置。恢复先校验并创建 `pre_restore_snapshots/` 快照（保留最近 5 份），且在全局维护锁内进行；ZIP 路径、符号链接、文件数量、大小和压缩比均受限。
+- `archive_exports/` 保存 ZIP + manifest + SHA-256 校验的手动导出；归档包含日记、历史 `reviews/` 文件、revision/correction、continuity 和非敏感运行状态，不会递归打包历史 ZIP，也不会恢复设置、密码或实例配置。恢复先校验并创建 `pre_restore_snapshots/` 快照（保留最近 5 份），且在全局维护锁内进行；ZIP 路径、符号链接、文件数量、大小和压缩比均受限。
 - 人物/项目生命周期、角色 reflection 与 integrity audit 都只读取 daily 当前事实。生命周期只给出“活跃 / 最近未观察到 / 未知”等观察性描述；reflection 明确标记 `subjective`，保存稳定 `source_refs`，不参与事实检索或统计；audit 的安全修复只补可确定的结构/兼容字段，绝不从 Markdown 猜测事实。
 - 管理页新增纠错/修订查看与 diff/回滚、备份校验恢复、人物和项目轨迹、reflection 与完整性检查入口。所有数据按需经 AstrBot Dashboard 鉴权 API 读取，页面以 DOM `textContent` 渲染，不把日记内容或凭据放进静态文件。

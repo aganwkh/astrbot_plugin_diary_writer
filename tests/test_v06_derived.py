@@ -8,8 +8,7 @@ from diary.corrections import CorrectionService
 from diary.archives import ArchiveService
 from diary.integrity import IntegrityAudit
 from diary.lifecycle import lifecycle
-from diary.reflections import ReflectionService
-from diary.reviews import ReviewService, core_fingerprint, review_fingerprint
+from diary.reflections import ReflectionService, core_fingerprint
 from diary.storage import DiaryStorage, atomic_write_json, atomic_write_text
 
 
@@ -60,19 +59,14 @@ class DerivedV06Tests(unittest.TestCase):
             asyncio.run(CorrectionService(storage).replace("2024-01-01", "projects", "Old", "New"))
             self.assertTrue(storage.load_reflection_metadata("monthly", "2024-01")["reflection_stale"])
 
-    def test_audit_detects_yearly_monthly_and_reflection_stable_reference_damage(self):
+    def test_audit_detects_reflection_stable_reference_damage(self):
         with tempfile.TemporaryDirectory() as temp:
             storage = DiaryStorage(Path(temp))
             write_daily(storage, "2024-01-01", events=[{"summary": "work", "facts": ["fact"], "memory_ids": ["m-1"]}])
             IntegrityAudit(storage).safe_repair()
             event = storage.load_metadata("2024-01-01")["events"][0]
-            monthly = {"title": "January", "topics": [], "people": [], "projects": [], "events": [], "highlights": [], "unresolved": []}
-            storage.write_review("monthly", "2024-01", "# January", monthly)
-            storage.write_review("yearly", "2024", "# Year", {"summary_stale": False, "source_monthly_fingerprints": {"2024-01": review_fingerprint(monthly)}})
             storage.write_reflection("monthly", "2024-01", "# Reflection", {"subjective": True, "reflection_stale": False, "source_refs": [{"date": "2024-01-01", "field": "events", "event_id": event["event_id"], "fact_id": event["fact_records"][0]["fact_id"]}, {"date": "2024-01-01", "field": "events", "event_id": "event_missing"}]})
-            monthly["title"] = "Changed"; storage.write_review("monthly", "2024-01", "# Changed", monthly)
             codes = {item["code"] for item in IntegrityAudit(storage).check()["issues"]}
-            self.assertIn("yearly_monthly_fingerprint_mismatch", codes)
             self.assertIn("dangling_reflection_event_ref", codes)
 
     def test_integrity_finds_fixture_damage_and_safe_repair_only_adds_structure(self):
@@ -124,14 +118,11 @@ class DerivedV06Tests(unittest.TestCase):
             fingerprint = core_fingerprint(legacy)
             IntegrityAudit(storage).safe_repair()
             self.assertEqual(fingerprint, core_fingerprint(storage.load_metadata("2024-01-01")))
-            storage.write_review("monthly", "2024-01", "# review", {"summary_stale": False, "source_fingerprints": {"2024-01-01": fingerprint}})
             storage.write_reflection("monthly", "2024-01", "# reflection", {"subjective": True, "reflection_stale": False, "source_fingerprints": {"2024-01-01": fingerprint}, "source_refs": [{"date": "2024-01-01", "field": "projects"}]})
             changed = storage.load_metadata("2024-01-01"); changed["projects"] = ["New"]; atomic_write_json(storage.metadata_path("2024-01-01"), changed)
             codes = {item["code"] for item in IntegrityAudit(storage).check()["issues"]}
-            self.assertIn("review_source_fingerprint_mismatch", codes)
             self.assertIn("reflection_source_fingerprint_mismatch", codes)
             IntegrityAudit(storage).safe_repair()
-            self.assertTrue(storage.load_review_metadata("monthly", "2024-01")["summary_stale"])
             self.assertTrue(storage.load_reflection_metadata("monthly", "2024-01")["reflection_stale"])
 
 

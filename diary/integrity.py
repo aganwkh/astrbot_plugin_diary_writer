@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import normalize_daily_metadata
-from .reflections import ReflectionService
-from .reviews import ReviewService
+from .reflections import ReflectionService, core_fingerprint
 from .storage import DiaryStorage, atomic_write_json
 
 
@@ -43,8 +42,6 @@ class IntegrityAudit:
             data = normalize_daily_metadata(data)
             if json.dumps(data, ensure_ascii=False, sort_keys=True) != before:
                 atomic_write_json(path, data); repaired.append(path.stem)
-        reviews = ReviewService(self.storage)
-        for kind, period, _ in self.storage.iter_review_metadata() or (): reviews.refresh_staleness(kind, period)
         reflections = ReflectionService(self.storage)
         for kind, period, _ in self.storage.iter_reflection_metadata() or ():
             reflections.refresh_staleness(kind, period)
@@ -100,12 +97,7 @@ class IntegrityAudit:
                     self._issue(issues, "missing_correction_revision", date=root.name, correction_id=str(correction.get("id") or ""))
 
     def _derived(self, issues: list[dict[str, Any]]) -> None:
-        self._pair_issues(self.storage.review_root, self.storage.review_metadata_root, "review", issues)
         self._pair_issues(self.storage.reflection_root, self.storage.reflection_metadata_root, "reflection", issues)
-        for kind, period, item in self.storage.iter_review_metadata() or ():
-            if item.get("summary_stale"): self._issue(issues, "stale_review", severity="warning", kind=kind, period=period)
-            self._fingerprint_issues(item, "review", kind, period, issues)
-            if kind == "yearly": self._yearly_monthly_fingerprint_issues(item, period, issues)
         for kind, period, item in self.storage.iter_reflection_metadata() or ():
             if not item.get("subjective"): self._issue(issues, "reflection_not_subjective", kind=kind, period=period)
             if item.get("reflection_stale"): self._issue(issues, "stale_reflection", severity="warning", kind=kind, period=period)
@@ -113,7 +105,6 @@ class IntegrityAudit:
             self._reflection_ref_issues(item, kind, period, issues)
 
     def _fingerprint_issues(self, item: dict[str, Any], label: str, kind: str, period: str, issues: list[dict[str, Any]]) -> None:
-        from .reviews import core_fingerprint
         fingerprints = item.get("source_fingerprints")
         if not isinstance(fingerprints, dict):
             return
@@ -121,16 +112,6 @@ class IntegrityAudit:
             current = self.storage.load_metadata(str(value))
             if current is None or core_fingerprint(current) != expected:
                 self._issue(issues, f"{label}_source_fingerprint_mismatch", severity="warning", kind=kind, period=period, date=str(value))
-
-    def _yearly_monthly_fingerprint_issues(self, item: dict[str, Any], period: str, issues: list[dict[str, Any]]) -> None:
-        from .reviews import review_fingerprint
-        fingerprints = item.get("source_monthly_fingerprints")
-        if not isinstance(fingerprints, dict):
-            return
-        for month, expected in fingerprints.items():
-            current = self.storage.load_review_metadata("monthly", str(month))
-            if current is None or review_fingerprint(current) != expected:
-                self._issue(issues, "yearly_monthly_fingerprint_mismatch", severity="warning", kind="yearly", period=period, monthly_period=str(month))
 
     def _reflection_ref_issues(self, item: dict[str, Any], kind: str, period: str, issues: list[dict[str, Any]]) -> None:
         allowed = {"title", "mood", "topics", "people", "projects", "highlights", "unresolved", "ongoing_topics", "events"}
@@ -164,7 +145,7 @@ class IntegrityAudit:
         for value in sorted(metadata - markdown): self._issue(issues, f"missing_{label}_markdown", period=value)
 
     def _states(self, issues: list[dict[str, Any]]) -> None:
-        for name in ("generation_state.json", "review_generation_state.json", "reflection_generation_state.json"):
+        for name in ("generation_state.json", "reflection_generation_state.json"):
             path = self.storage.root / name
             if path.exists() and self._json(path) is None: self._issue(issues, "invalid_generation_state", file=name)
         # Archives are untrusted external inputs even when kept locally.  Reuse the

@@ -37,7 +37,7 @@ function summaryRow(label, value) {
 export function renderShell(state, t) {
   document.title = t("pages.diary-manager.title", "日记管理");
   document.getElementById("page-title").textContent = t("pages.diary-manager.heading", "日记管理");
-  document.getElementById("page-description").textContent = t("pages.diary-manager.description", "查看已保存的日记与派生回顾。");
+  document.getElementById("page-description").textContent = t("pages.diary-manager.description", "查看已保存的日记。");
   document.getElementById("refresh").textContent = t("pages.diary-manager.refresh", "刷新");
   document.querySelectorAll("[data-panel]").forEach((panel) => panel.classList.toggle("is-hidden", panel.dataset.panel !== state.activeTab));
   document.querySelectorAll("[data-tab]").forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === state.activeTab));
@@ -54,10 +54,7 @@ export function renderOverview(state) {
   section.append(counts);
   const settings = element("p", "muted", `自动写日记：${data.auto_write_enabled ? "已开启" : "已关闭"}；生成 Provider：${data.generation_provider_configured ? "已配置" : "未配置"}`);
   section.append(settings);
-  const stale = data.stale_summaries || [];
-  section.append(element("h2", "section-title", "需要重建的总结"));
-  section.append(stale.length ? list(stale, (row, item) => row.append(element("strong", "", `${item.kind}: ${item.period}`), element("span", "muted", item.stale_reason || "来源日记已变化"))) : element("p", "muted", "没有过期总结。"));
-  const failures = [data.generation_state, data.review_generation_state].filter((item) => item && item.failed);
+  const failures = [data.generation_state].filter((item) => item && item.failed);
   section.append(element("h2", "section-title", "生成状态"));
   section.append(failures.length ? list(failures, (row, item) => row.append(element("strong", "", item.pending_date || item.pending_period || "待处理"), element("span", "muted", `失败，已重试 ${item.retry_count || 0} 次`))) : element("p", "muted", "没有待处理的失败生成。"));
   replace(target, section);
@@ -76,7 +73,7 @@ export function renderTimeline(state, onEntry) {
   }) : element("p", "muted", "没有可展示的日记。"));
   const browse = element("form", "generate-form");
   const kind = document.createElement("select");
-  ["daily", "weekly", "monthly", "yearly"].forEach((value) => {
+  ["daily"].forEach((value) => {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = value;
@@ -94,7 +91,7 @@ export function renderTimeline(state, onEntry) {
     event.preventDefault();
     onEntry(kind.value, period.value.trim());
   });
-  section.append(element("h2", "section-title", "浏览 daily / weekly / monthly / yearly"), browse);
+  section.append(element("h2", "section-title", "浏览日记"), browse);
   replace(target, section);
 }
 
@@ -164,7 +161,7 @@ export function renderGenerate(onGenerate) {
   const form = element("form", "generate-form");
   const kind = document.createElement("select");
   kind.name = "kind";
-  ["daily", "weekly", "monthly", "yearly"].forEach((value) => {
+  ["daily"].forEach((value) => {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = value;

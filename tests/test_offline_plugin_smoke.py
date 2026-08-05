@@ -285,55 +285,6 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             await plugin._fallback()
             self.assertEqual(provider.calls, 1)
 
-    async def test_restore_cannot_split_daily_follow_up_or_state_writes(self):
-        with tempfile.TemporaryDirectory() as temp:
-            plugin_module = load_plugin(Path(temp))
-            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"], "on_this_day_reminder_enabled": True})
-            plugin.service.source = Source()
-            provider = Provider()
-
-            async def get_provider(_event=None): return provider
-            plugin._provider = get_provider
-            review_started, release_review, restore_entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
-            original_follow_up = plugin.reviews._after_daily_written_unlocked
-
-            async def delayed_follow_up(*args):
-                review_started.set()
-                await release_review.wait()
-                return await original_follow_up(*args)
-
-            plugin.reviews._after_daily_written_unlocked = delayed_follow_up
-            write_task = asyncio.create_task(collect(plugin.backfill(Event(), "2025-07-27")))
-            await review_started.wait()
-
-            async def restore_once():
-                async with plugin_module.GLOBAL_MAINTENANCE_GATE.restore():
-                    restore_entered.set()
-
-            restore_task = asyncio.create_task(restore_once())
-            await asyncio.sleep(0)
-            self.assertFalse(restore_entered.is_set())
-            release_review.set()
-            await write_task
-            await restore_task
-            self.assertTrue(plugin.storage.has_any_diary("2025-07-27"))
-
-            today = datetime.now().date()
-            past = today.replace(year=today.year - 1)
-            from diary.storage import atomic_write_json
-            atomic_write_json(plugin.storage.metadata_path(past.isoformat()), {"date": past.isoformat(), "title": "history", "events": []})
-            event = Event(); event.message_str = "ordinary private message"
-            async with plugin_module.GLOBAL_MAINTENANCE_GATE.restore():
-                activity_task = asyncio.create_task(plugin.on_user_message(event))
-                reminder_task = asyncio.create_task(collect(plugin.on_this_day_reminder(event)))
-                await asyncio.sleep(0)
-                self.assertFalse(plugin.storage.load_activity())
-                self.assertFalse(plugin.storage.reminder_state_path.exists())
-            await activity_task
-            await reminder_task
-            self.assertTrue(plugin.storage.load_activity())
-            self.assertTrue(plugin.storage.reminder_state_path.exists())
-
     async def test_private_commands_do_not_leak_body_to_groups_or_unauthorized_users(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))
@@ -353,11 +304,5 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.on_this_day(group))))
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.project(group, "Godot"))))
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.topic(group, "AstrBot"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.backfill_weekly(group, "2025-W30"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_weekly(group, "2025-W30"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.backfill_monthly(group, "2025-07"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_monthly(group, "2025-07"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.backfill_yearly(group, "2025"))))
-            self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.rewrite_yearly(group, "2025"))))
             self.assertEqual(await collect(plugin.view(stranger, "2026-07-25")), [])
             self.assertIn("TOP SECRET BODY", "".join(await collect(plugin.view(private, "2026-07-25"))))

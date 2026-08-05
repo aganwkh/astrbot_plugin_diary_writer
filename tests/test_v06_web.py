@@ -3,7 +3,6 @@ import unittest
 from pathlib import Path
 
 from diary.storage import DiaryStorage
-from diary.reviews import ReviewService
 import diary.web_api as web_api
 
 
@@ -51,7 +50,7 @@ class V06WebTests(unittest.IsolatedAsyncioTestCase):
             "date": "2025-01-01", "title": "Old", "projects": ["Old"], "people": ["Alice"],
             "topics": [], "events": [{"summary": "Private event", "memory_ids": [], "facts": ["Private fact"]}],
         })
-        self.api = web_api.DiaryWebApi(Context(), Config(), self.storage, Service(), ReviewService(self.storage))
+        self.api = web_api.DiaryWebApi(Context(), Config(), self.storage, Service())
         self.previous_request = web_api.request
 
     def tearDown(self):
@@ -121,6 +120,10 @@ class V06WebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.api.lifecycle())["status_code"], 400)
         self.request(query={"kind": "daily", "period": "2025-01-01"})
         self.assertEqual((await self.api.reflections_list())["status_code"], 400)
+
+    async def test_reflection_generation_keeps_monthly_and_yearly_routes(self):
+        self.request(payload={"kind": "monthly", "period": "2025-01", "force": False})
+        self.assertEqual((await self.api.reflection_generate())["error"], "generation_provider_id is not configured")
 
     def test_page_assets_render_untrusted_data_as_text_nodes(self):
         root = Path("pages/diary-manager")

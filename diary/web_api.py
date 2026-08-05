@@ -7,10 +7,9 @@ import re
 from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from .retrieval import search_daily, timeline
-from .service import diary_changed
 from .storage import DiaryStorage
 from .trends import build_trends
 from .corrections import CorrectionError, CorrectionService
@@ -121,13 +120,11 @@ class DiaryWebApi:
         config: Any,
         storage: DiaryStorage,
         service: Any,
-        reviews: Any,
-        after_daily: Callable[[date, Any, str], Awaitable[None]] | None = None,
         persona_resolver: Callable[[list[str]], Awaitable[str]] | None = None,
     ):
         self.context, self.config, self.storage = context, config, storage
-        self.service, self.reviews, self.after_daily = service, reviews, after_daily
-        self.corrections = CorrectionService(storage, reviews)
+        self.service = service
+        self.corrections = CorrectionService(storage)
         self.archives = ArchiveService(storage, {
             key: getattr(config, key) for key in (
                 "diary_main_prompt", "auto_write_enabled", "inactive_minutes", "fallback_inactive_minutes", "cron_start_delay_minutes", "on_this_day_reminder_enabled",
@@ -215,19 +212,10 @@ class DiaryWebApi:
         if (denied := self._identity_error()) is not None:
             return denied
         daily = list(self.storage.iter_daily_metadata() or ())
-        reviews = list(self.storage.iter_review_metadata() or ())
-        counts = {"daily": len(daily), "weekly": 0, "monthly": 0, "yearly": 0}
-        stale = []
-        for kind, period, metadata in reviews:
-            if kind in counts:
-                counts[kind] += 1
-            if metadata.get("summary_stale"):
-                stale.append({"kind": kind, "period": period, "stale_reason": str(metadata.get("stale_reason") or "")})
         return json_response({
-            "counts": counts,
-            "stale_summaries": stale,
+            "counts": {"daily": len(daily)},
+            "stale_summaries": [],
             "generation_state": _public_generation_state(_load_json(self.storage.state_path), "pending_date"),
-            "review_generation_state": _public_generation_state(_load_json(self.storage.review_state_path), "pending_period"),
             "auto_write_enabled": bool(getattr(self.config, "can_auto_write", False)),
             "generation_provider_configured": bool(getattr(self.config, "generation_provider_id", "")),
         })
@@ -273,10 +261,9 @@ class DiaryWebApi:
             period = _period(kind, self._query("period"))
         except ValueError as exc:
             return error_response(str(exc), status_code=400)
-        if kind == "daily":
-            metadata, markdown_path = self.storage.load_metadata(period), self.storage.diary_path(period)
-        else:
-            metadata, markdown_path = self.storage.load_review_metadata(kind, period), self.storage.review_path(kind, period)
+        if kind != "daily":
+            return error_response("only daily entries are available", status_code=404)
+        metadata, markdown_path = self.storage.load_metadata(period), self.storage.diary_path(period)
         if metadata is None and not markdown_path.is_file():
             return error_response("entry not found", status_code=404)
         try:
@@ -559,6 +546,8 @@ class DiaryWebApi:
             kind, period = str(payload.get("kind") or ""), _period(str(payload.get("kind") or ""), payload.get("period"))
         except ValueError as exc:
             return error_response(str(exc), status_code=400)
+        if kind != "daily":
+            return error_response("only daily entries can be generated", status_code=400)
         force = payload.get("force", False)
         if not isinstance(force, bool):
             return error_response("force must be a boolean", status_code=400)
@@ -569,22 +558,13 @@ class DiaryWebApi:
             provider = self.context.get_provider_by_id(provider_id)
             if provider is None:
                 raise RuntimeError("configured provider was not found")
-            if kind == "daily":
-                generate_unlocked = getattr(self.service, "_generate_unlocked", None)
-                gate = getattr(self.service, "gate", None)
-                if callable(generate_unlocked) and gate is not None:
-                    # The daily pair and the derived review state must be one restore-safe unit.
-                    async with gate.operation():
-                        result = await generate_unlocked(date.fromisoformat(period), provider, force=force)
-                        if diary_changed(result) and self.after_daily is not None:
-                            await self.after_daily(date.fromisoformat(period), provider, "daily_rewritten" if force else "daily_added")
-                else:
-                    # Offline API stubs do not expose the internal orchestration hook.
-                    result = await self.service.generate(date.fromisoformat(period), provider, force=force)
-                    if diary_changed(result) and self.after_daily is not None:
-                        await self.after_daily(date.fromisoformat(period), provider, "daily_rewritten" if force else "daily_added")
+            generate_unlocked = getattr(self.service, "_generate_unlocked", None)
+            gate = getattr(self.service, "gate", None)
+            if callable(generate_unlocked) and gate is not None:
+                async with gate.operation():
+                    result = await generate_unlocked(date.fromisoformat(period), provider, force=force)
             else:
-                result = await self.reviews.generate(kind, period, provider, force=force)
+                result = await self.service.generate(date.fromisoformat(period), provider, force=force)
         except Exception:
             return error_response("generation failed; inspect generation state", status_code=500)
         if not result:
