@@ -255,6 +255,43 @@ class DiaryWriterPlugin(Star):
 
     def _private(self, event): return can_access_sensitive_diary(event, self.config)
 
+    @staticmethod
+    def _resolve_diary_tool_date(value: str) -> str | None:
+        raw = str(value or "").strip()
+        relative_days = {"今天": 0, "昨天": 1, "前天": 2}
+        if raw in relative_days:
+            return (datetime.now() - timedelta(days=relative_days[raw])).date().isoformat()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return None
+
+    @filter.llm_tool(name="read_diary")
+    async def read_diary(self, event: AstrMessageEvent, date: str) -> str:
+        """读取你自己过去写下的私人日记的完整 Markdown 正文。
+
+        仅在用户明确要求查看、阅读或翻看指定日期的日记时调用。读取结果是你自己的过去记录、想法和感受；不要把它当作当前正在发生的事情。没有调用此工具时，不要声称已经查看过指定日记。
+
+        Args:
+            date(string): 要读取的日记日期，只能是 今天、昨天、前天 或 YYYY-MM-DD。
+        """
+        if not self._private(event):
+            return "无权读取私人日记。"
+        target = self._resolve_diary_tool_date(date)
+        if not target:
+            return "日期无效；请使用 今天、昨天、前天 或 YYYY-MM-DD。"
+        path = self.storage.diary_path(target)
+        if not path.is_file():
+            return f"没有找到 {target} 的日记。"
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(f"[DiaryWriter] could not read diary {target}: {exc}")
+            return f"读取 {target} 的日记失败。"
+        return f"日期：{target}\n\n{markdown}"
+
     @filter.command("日记状态")
     async def status(self, event: AstrMessageEvent):
         if not is_authorized(event, self.config): return

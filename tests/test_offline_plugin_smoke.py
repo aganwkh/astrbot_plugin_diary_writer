@@ -78,10 +78,19 @@ class Event:
 
 def load_plugin(data_root: Path, module_name: str = "offline_main"):
     logger = types.SimpleNamespace(info=lambda *_: None, warning=lambda *_: None, error=lambda *_: None)
+    registered_llm_tools = []
+
+    def llm_tool(name=None):
+        def decorator(function):
+            registered_llm_tools.append((name or function.__name__, function))
+            return function
+        return decorator
+
     filter_api = types.SimpleNamespace(
         EventMessageType=types.SimpleNamespace(ALL="all", PRIVATE_MESSAGE="private_message"),
         event_message_type=lambda _kind: lambda function: function,
         command=lambda _name: lambda function: function,
+        llm_tool=llm_tool,
     )
     api = types.ModuleType("astrbot.api")
     api.logger = logger
@@ -114,6 +123,7 @@ def load_plugin(data_root: Path, module_name: str = "offline_main"):
     with patch.dict(sys.modules, modules):
         spec.loader.exec_module(module)
     module.PLUGIN_DATA_ROOT = data_root / "plugins" / "astrbot_plugin_diary_writer" / "data"
+    module._offline_registered_llm_tools = registered_llm_tools
     return module
 
 
@@ -306,3 +316,81 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("TOP SECRET BODY", "".join(await collect(plugin.topic(group, "AstrBot"))))
             self.assertEqual(await collect(plugin.view(stranger, "2026-07-25")), [])
             self.assertIn("TOP SECRET BODY", "".join(await collect(plugin.view(private, "2026-07-25"))))
+
+    async def test_read_diary_tool_is_registered_with_private_diary_date_schema(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            registered = dict(plugin_module._offline_registered_llm_tools)
+
+            self.assertIn("read_diary", registered)
+            docstring = registered["read_diary"].__doc__ or ""
+            self.assertIn("自己过去写下的私人日记", docstring)
+            self.assertIn("date(string)", docstring)
+            self.assertIn("YYYY-MM-DD", docstring)
+
+    async def test_read_diary_tool_reads_today_yesterday_day_before_and_exact_markdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            today = datetime.now().date()
+            expected = {
+                "今天": today,
+                "昨天": today - timedelta(days=1),
+                "前天": today - timedelta(days=2),
+                "2026-07-25": datetime(2026, 7, 25).date(),
+            }
+            for requested, target in expected.items():
+                markdown = f"# {target.isoformat()}\n\n完整 Markdown 正文：{requested}"
+                plugin.storage.write_diary_data(target.isoformat(), markdown, {"date": target.isoformat()})
+                result = await plugin.read_diary(Event(), requested)
+                self.assertEqual(result, f"日期：{target.isoformat()}\n\n{markdown}")
+
+    async def test_read_diary_tool_rejects_invalid_dates_and_does_not_generate_missing_diaries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+            provider = Provider()
+
+            async def get_provider(_event=None):
+                return provider
+
+            plugin._provider = get_provider
+            self.assertEqual(
+                await plugin.read_diary(Event(), "上周三"),
+                "日期无效；请使用 今天、昨天、前天 或 YYYY-MM-DD。",
+            )
+            self.assertEqual(
+                await plugin.read_diary(Event(), "2026-07-25"),
+                "没有找到 2026-07-25 的日记。",
+            )
+            self.assertFalse(plugin.storage.diary_path("2026-07-25").exists())
+            self.assertEqual(provider.calls, 0)
+
+    async def test_read_diary_tool_requires_authorized_private_event_and_is_read_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(Context(), {"owner_ids": ["1"]})
+
+            class LivingMemoryMustNotBeTouched:
+                def __getattr__(self, _name):
+                    raise AssertionError("read_diary must not access LivingMemory")
+
+            plugin.service.source = LivingMemoryMustNotBeTouched()
+            markdown = "# 私人日记\n\n只应返回给授权私聊。"
+            plugin.storage.write_diary_data("2026-07-25", markdown, {"date": "2026-07-25"})
+            diary_path = plugin.storage.diary_path("2026-07-25")
+            metadata_path = plugin.storage.metadata_path("2026-07-25")
+            before = (diary_path.read_bytes(), metadata_path.read_bytes())
+            self.assertFalse(plugin.storage.state_path.exists())
+
+            self.assertEqual(
+                await plugin.read_diary(Event(origin="qq:GroupMessage:123"), "2026-07-25"),
+                "无权读取私人日记。",
+            )
+            self.assertEqual(
+                await plugin.read_diary(Event(sender="2"), "2026-07-25"),
+                "无权读取私人日记。",
+            )
+            self.assertEqual(await plugin.read_diary(Event(), "2026-07-25"), f"日期：2026-07-25\n\n{markdown}")
+            self.assertEqual((diary_path.read_bytes(), metadata_path.read_bytes()), before)
+            self.assertFalse(plugin.storage.state_path.exists())
