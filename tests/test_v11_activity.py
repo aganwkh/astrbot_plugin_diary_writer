@@ -144,10 +144,15 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(low_source.before_calls, 1)
             self.assertEqual(low_source.range_calls, 1)
             self.assertIn('"entry_type": "low_activity"', low_provider.prompts[0])
+            low_prompt = json.loads(low_provider.prompts[0])
+            self.assertEqual(low_prompt["historical_memory_sources"][0]["source_role"], "past_context_only")
+            self.assertEqual(low_prompt["historical_memory_sources"][0]["temporal_context"]["anchor_date"], "2026-07-20")
+            self.assertEqual(low_prompt["historical_memory_sources"][0]["temporal_context"]["days_before_diary"], 5)
             low_metadata = storage.load_metadata("2026-07-25")
             self.assertEqual(set(low_metadata["historical_memory_candidate_ids"]), {"historical-1", "historical-2", "historical-3"})
             self.assertEqual(low_metadata["historical_memory_used_ids"], ["historical-1"])
             self.assertEqual(low_metadata["prompt_version"], ADAPTIVE_PROMPT_VERSION)
+            self.assertNotIn("temporal_context", low_metadata["historical_memory_sources"][0])
 
         with tempfile.TemporaryDirectory() as temporary:
             storage = DiaryStorage(Path(temporary))
@@ -181,7 +186,11 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
                 return [SourceMemory(f"historical-{index}", datetime(2026, 7, 20, index, tzinfo=timezone.utc), f"历史事实{index}", session_id="qq:FriendMessage:owner") for index in range(1, 4)]
 
         class Provider:
-            async def text_chat(self, **_kwargs):
+            def __init__(self):
+                self.prompts = []
+
+            async def text_chat(self, prompt, **_kwargs):
+                self.prompts.append(json.loads(prompt))
                 return type("Response", (), {"completion_text": json.dumps({
                     "markdown": "# low\n", "title": "low", "events": [], "used_historical_memory_ids": ["historical-1"],
                 })})()
@@ -195,20 +204,23 @@ class ActivityTrackerTests(unittest.IsolatedAsyncioTestCase):
             })
             source = Source()
             service = DiaryService(DiaryConfig.from_mapping({"owner_ids": ["owner"]}), storage, source)
-            self.assertTrue(await service.generate(date(2026, 7, 25), Provider()))
+            provider = Provider()
+            self.assertTrue(await service.generate(date(2026, 7, 25), provider))
             original = storage.load_metadata("2026-07-25")
             self.assertEqual(original["entry_type"], "low_activity")
             self.assertEqual(original["activity_round_count"], 8)
             self.assertFalse(storage.daily_activity_path("2026-07-25").exists())
 
             source.allow_context_reads = False
-            self.assertTrue(await service.generate(date(2026, 7, 25), Provider(), force=True))
+            self.assertTrue(await service.generate(date(2026, 7, 25), provider, force=True))
             rewritten = storage.load_metadata("2026-07-25")
             self.assertEqual(rewritten["entry_type"], "low_activity")
             self.assertEqual(rewritten["activity_round_count"], 8)
             self.assertEqual(rewritten["conversation_sources"], original["conversation_sources"])
             self.assertEqual(rewritten["historical_memory_sources"], original["historical_memory_sources"])
             self.assertEqual(rewritten["private_session_ids"], original["private_session_ids"])
+            self.assertEqual(provider.prompts[-1]["historical_memory_sources"][0]["source_role"], "past_context_only")
+            self.assertEqual(provider.prompts[-1]["historical_memory_sources"][0]["temporal_context"]["anchor_date"], "2026-07-20")
 
     async def test_rewrite_migrates_legacy_sparse_to_low_activity_and_keeps_chat_sources(self):
         class Source:

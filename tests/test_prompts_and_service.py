@@ -69,7 +69,9 @@ class PromptTests(unittest.TestCase):
         prompts = load_module("diary.prompts")
         _, material = prompts.build_adaptive_messages(
             "2026-07-25", "sparse", [], ContinuityState(), DiaryConfig(),
-            [{"user_text": "当天私聊"}], [{"memory_id": "recent-1"}], [{"memory_id": "must-not-be-included"}],
+            [{"user_text": "当天私聊"}],
+            [{"memory_id": "recent-1", "occurred_at": "2026-07-23T10:00:00+08:00", "text": "Recent memory"}],
+            [{"memory_id": "must-not-be-included", "occurred_at": "2026-06-01T09:00:00+08:00", "text": "History"}],
         )
         payload = json.loads(material)
         contract = payload["mode_contract"]
@@ -83,15 +85,15 @@ class PromptTests(unittest.TestCase):
 
     def test_low_activity_contract_allows_recent_and_frozen_history(self):
         prompts = load_module("diary.prompts")
-        _, material = prompts.build_adaptive_messages(
+        system, material = prompts.build_adaptive_messages(
             "2026-07-25",
             "low_activity",
             [],
             ContinuityState(),
             DiaryConfig(),
             [],
-            [{"memory_id": "recent-1"}],
-            [{"memory_id": "historical-1"}],
+            [{"memory_id": "recent-1", "occurred_at": "2026-07-23T10:00:00+08:00", "text": "Recent memory"}],
+            [{"memory_id": "historical-1", "occurred_at": "2026-06-01T09:00:00+08:00", "text": "Historical memory"}],
         )
         payload = json.loads(material)
         contract = payload["mode_contract"]
@@ -100,7 +102,36 @@ class PromptTests(unittest.TestCase):
             contract["preserve_original_date_for"],
             ["recent_context_sources", "historical_memory_sources"],
         )
-        self.assertEqual(payload["historical_memory_sources"], [{"memory_id": "historical-1"}])
+        self.assertEqual(payload["historical_memory_sources"], [{
+            "memory_id": "historical-1",
+            "source_role": "past_context_only",
+            "temporal_context": {
+                "anchor_date": "2026-06-01",
+                "recorded_at": "2026-06-01T09:00:00+08:00",
+                "date_basis": "livingmemory_record_timestamp",
+                "relation_to_diary": "past",
+                "days_before_diary": 54,
+                "same_day_as_diary": False,
+            },
+            "text": "Historical memory",
+        }])
+        self.assertIn("temporal_context.anchor_date", system)
+        self.assertIn("日记日期", system)
+
+    def test_invalid_or_non_past_context_sources_are_omitted(self):
+        prompts = load_module("diary.prompts")
+        _, material = prompts.build_adaptive_messages(
+            "2026-07-25", "low_activity", [], ContinuityState(), DiaryConfig(), [],
+            [
+                {"memory_id": "missing", "text": "No timestamp"},
+                {"memory_id": "invalid", "occurred_at": "not-a-date", "text": "Bad timestamp"},
+                {"memory_id": "today", "occurred_at": "2026-07-25T09:00:00+08:00", "text": "Same day"},
+            ],
+            [],
+        )
+        payload = json.loads(material)
+        self.assertEqual(payload["recent_context_sources"], [])
+        self.assertEqual(payload["mode_contract"]["required_usage"], {})
 
     def test_normal_contract_only_packages_today_conversation_and_continuity(self):
         prompts = load_module("diary.prompts")

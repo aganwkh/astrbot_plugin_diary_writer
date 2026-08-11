@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from .config import DiaryConfig
 from .models import ContinuityState, DiaryEvent, DiaryMetadata, as_jsonable
 
 
-UNIFIED_PROMPT_VERSION = "v1.1.2-configurable"
+UNIFIED_PROMPT_VERSION = "v1.1.3-temporal-envelope"
 MODE_CONTRACT_VERSION = "v1"
 NORMAL_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
 ADAPTIVE_PROMPT_VERSION = UNIFIED_PROMPT_VERSION
@@ -24,6 +24,7 @@ OUTPUT_CONTRACT = """
 - today_fact_sources 才能支持“当天发生”的确定事实和 structured events。
 - context_only_sources 只能用于正文中的背景、回忆、联想、情绪或延续；除非同一事实也有 today_fact_sources 证据，否则不能写入 structured events。
 - preserve_original_date_for 中的素材必须保留原日期语义，不能改写成日记当天发生。
+- recent_context_sources 和 historical_memory_sources 中每条素材的 source_role 都是 past_context_only；其 text 内的“今天”“昨天”“前天”等相对时间必须以 temporal_context.anchor_date 为基准解释，不能以日记日期为基准。
 - required_usage 中标记的最低使用数量必须满足；不要求使用全部候选，也不要机械拼接。
 - continuity 只是长期状态提示，不能单独证明新的事实。
 - 主观感受可以自由表达；无依据的猜测必须使用不确定语气，不能制造人物、地点、对话、结果或新的结构化事实。
@@ -93,6 +94,41 @@ def _mode_contract(entry_type: str, recent_context_sources: list[dict], historic
     }
 
 
+def _context_sources(diary_date: str, sources: list[dict]) -> list[dict[str, Any]]:
+    target = date.fromisoformat(diary_date)
+    result = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        recorded_at = str(source.get("occurred_at") or "").strip()
+        try:
+            anchor = datetime.fromisoformat(recorded_at.replace("Z", "+00:00")).date()
+        except ValueError:
+            continue
+        days_before = (target - anchor).days
+        if days_before <= 0:
+            continue
+        remaining = {
+            key: value for key, value in source.items()
+            if key not in {"memory_id", "occurred_at", "source_role", "temporal_context", "text"}
+        }
+        result.append({
+            "memory_id": str(source.get("memory_id") or ""),
+            "source_role": "past_context_only",
+            "temporal_context": {
+                "anchor_date": anchor.isoformat(),
+                "recorded_at": recorded_at,
+                "date_basis": "livingmemory_record_timestamp",
+                "relation_to_diary": "past",
+                "days_before_diary": days_before,
+                "same_day_as_diary": False,
+            },
+            "text": str(source.get("text") or ""),
+            **remaining,
+        })
+    return result
+
+
 def _material(
     date: str,
     entry_type: str,
@@ -102,19 +138,21 @@ def _material(
     recent_context_sources: list[dict],
     historical_memory_sources: list[dict],
 ) -> dict[str, Any]:
+    recent_prompt_sources = _context_sources(date, recent_context_sources)
+    historical_prompt_sources = _context_sources(date, historical_memory_sources)
     material = {
         "date": date,
         "entry_type": entry_type,
         "prompt_version": UNIFIED_PROMPT_VERSION,
-        "mode_contract": _mode_contract(entry_type, recent_context_sources, historical_memory_sources),
+        "mode_contract": _mode_contract(entry_type, recent_prompt_sources, historical_prompt_sources),
         "today_events": as_jsonable(events),
         "conversation_sources": conversation_sources,
         "continuity": as_jsonable(continuity),
     }
     if entry_type in {"sparse", "low_activity"}:
-        material["recent_context_sources"] = recent_context_sources
+        material["recent_context_sources"] = recent_prompt_sources
     if entry_type == "low_activity":
-        material["historical_memory_sources"] = historical_memory_sources
+        material["historical_memory_sources"] = historical_prompt_sources
     return material
 
 
