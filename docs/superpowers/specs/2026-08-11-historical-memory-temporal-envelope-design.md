@@ -38,7 +38,7 @@ The prompt contract must state that relative time expressions inside `text` are 
 - `recorded_at`: the original full ISO timestamp retained for traceability.
 - `date_basis`: fixed value `livingmemory_record_timestamp`, preventing the timestamp from being overstated as a verified event time.
 - `relation_to_diary`: fixed value `past` for recent and historical context supplied to adaptive generation.
-- `days_before_diary`: non-negative calendar-day difference between `anchor_date` and the target diary date.
+- `days_before_diary`: positive calendar-day difference between `anchor_date` and the target diary date.
 - `same_day_as_diary`: fixed `false` for these context lists, giving the model an immediate boolean distinction.
 - `source_role`: fixed value `past_context_only`, colocated with the memory instead of requiring the model to infer its role only from `mode_contract`.
 
@@ -52,7 +52,7 @@ Normal entries remain unchanged because they do not receive recent or historical
 
 ## Failure behavior
 
-Malformed saved context records without a valid `occurred_at` are omitted from the prompt rather than assigned a guessed date. Existing generation error handling remains unchanged. The design adds no semantic post-check, retry, second provider call, or automatic diary rewrite.
+Malformed saved context records without a valid past `occurred_at` are omitted from the prompt rather than assigned a guessed date. Existing generation error handling remains unchanged. The design adds no semantic post-check, retry, second provider call, or automatic diary rewrite.
 
 ## Compatibility
 
