@@ -141,6 +141,15 @@ class OfflinePluginSmokeTests(unittest.IsolatedAsyncioTestCase):
         plugin.public_site = Site()
         return plugin.public_site
 
+    async def test_empty_provider_id_uses_global_provider_for_scheduled_generation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            plugin_module = load_plugin(Path(temp))
+            plugin = plugin_module.DiaryWriterPlugin(
+                Context(), {"owner_ids": ["1"], "generation_provider_id": ""},
+            )
+            provider = await plugin._provider()
+            self.assertIsNotNone(provider)
+
     async def test_diary_resolves_the_selected_astrbot_conversation_persona(self):
         with tempfile.TemporaryDirectory() as temp:
             plugin_module = load_plugin(Path(temp))

@@ -160,9 +160,12 @@ class DiaryWriterPlugin(Star):
     async def _provider(self, event=None):
         if self.config.generation_provider_id:
             return self.context.get_provider_by_id(self.config.generation_provider_id)
-        if event is not None:
-            return self.context.get_using_provider(umo=event.unified_msg_origin)
-        return None
+        umo = getattr(event, "unified_msg_origin", None) if event is not None else None
+        get_using_provider_async = getattr(self.context, "get_using_provider_async", None)
+        if get_using_provider_async is not None:
+            return await get_using_provider_async(umo=umo)
+        # Compatibility with older AstrBot versions and the offline test context.
+        return self.context.get_using_provider(umo=umo)
 
     async def _astrbot_persona_prompt(self, session_ids: list[str]) -> str:
         """Resolve AstrBot's effective persona without copying or overriding it in plugin config."""

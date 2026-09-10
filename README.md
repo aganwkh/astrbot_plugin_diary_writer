@@ -51,7 +51,7 @@
 ## 配置要点
 
 - `owner_ids` 默认为空，必须显式配置授权用户。
-- `generation_provider_id` 用于自动生成；留空时仅能使用触发私聊的模型。
+- `generation_provider_id` 可用于固定日记生成模型；留空时，后台自动生成使用 AstrBot 当前全局主 LLM，有私聊事件时使用该会话选中的模型。
 - 日记作者直接继承当前私聊会话选中的 AstrBot 人格；可在 `diary_main_prompt` 中自由编辑日记主提示词，插件仅自动附加素材、日期、证据和输出契约。
 - 内置公开日记站默认监听 `0.0.0.0:8788`；手机直接访问 `http://服务器公网IP:8788`。它无需登录，任何能访问此地址的人都能阅读全部日记，仅提供阅读，不提供搜索、编辑、来源证据或管理接口。可通过 `public_site_port` 改端口，并在服务器防火墙和安全组放行该 TCP 端口。
 - `livingmemory_db_path` 可覆盖默认的 LivingMemory SQLite 路径。
